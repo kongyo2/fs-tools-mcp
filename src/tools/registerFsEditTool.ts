@@ -92,12 +92,17 @@ export function registerFsEditTool(server: McpServer): void {
         }
 
         const currentMetaResult = readFileForEdit(absoluteFilePath);
-        if (currentMetaResult.isErr()) {
+        if (
+          currentMetaResult.isErr() &&
+          currentMetaResult.error.code !== "ENOENT"
+        ) {
           return errorResult(
             `Cannot read file for editing: ${currentMetaResult.error.message}`,
           );
         }
-        const currentMeta = currentMetaResult.value;
+        const currentMeta: FileEditMeta = currentMetaResult.isOk()
+          ? currentMetaResult.value
+          : { content: "", encoding: "utf8", lineEndings: "LF" };
 
         const actualOldString =
           findActualString(currentMeta.content, old_string) ?? old_string;
