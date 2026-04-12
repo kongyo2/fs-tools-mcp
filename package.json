@@ -35,6 +35,10 @@
     "sharp": "0.34.5",
     "zod": "3.25.76"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kongyo2/fs-tools-mcp"
+  },
   "devDependencies": {
     "@types/node": "24.6.1",
     "oxlint": "^1.59.0",
