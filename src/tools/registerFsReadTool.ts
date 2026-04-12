@@ -65,7 +65,11 @@ const inputSchema = z
   })
   .strict();
 
-const outputSchema = z.discriminatedUnion("type", [
+// Detailed discriminated union for TypeScript type inference only.
+// NOT passed to MCP SDK's registerTool because the SDK's normalizeObjectSchema
+// cannot handle discriminatedUnion (returns undefined), which causes a crash
+// in safeParseAsync when isZ4Schema accesses undefined._zod.
+const readOutputUnion = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("text"),
     file: z.object({
@@ -124,7 +128,13 @@ const outputSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-type ReadOutput = z.infer<typeof outputSchema>;
+type ReadOutput = z.infer<typeof readOutputUnion>;
+
+// Flat object schema compatible with MCP SDK's normalizeObjectSchema.
+const outputSchema = z.object({
+  type: z.enum(["text", "image", "notebook", "pdf", "parts", "file_unchanged"]),
+  file: z.any(),
+});
 
 export function registerFsReadTool(
   server: McpServer,

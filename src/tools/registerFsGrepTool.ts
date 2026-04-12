@@ -59,10 +59,12 @@ const inputSchema = z
       "Case insensitive search.",
     ),
     type: z.string().optional().describe("File type to search (rg --type)."),
-    head_limit: semanticNumber(z.number().optional()).describe(
+    head_limit: semanticNumber(
+      z.number().int().nonnegative().optional(),
+    ).describe(
       "Limit output to first N lines/entries. Defaults to 250 when unspecified. Pass 0 for unlimited.",
     ),
-    offset: semanticNumber(z.number().optional()).describe(
+    offset: semanticNumber(z.number().int().nonnegative().optional()).describe(
       "Skip first N lines/entries before applying head_limit.",
     ),
     multiline: semanticBoolean(z.boolean().optional()).describe(
@@ -223,18 +225,21 @@ async function runGrep(
 
   if (output_mode === "content") {
     const limited = applyHeadLimit(results, head_limit, offset);
+    const fileSet = new Set<string>();
     const finalLines = limited.items.map((line) => {
-      const colonIndex = line.indexOf(":");
-      if (colonIndex > 0) {
-        const filePath = line.slice(0, colonIndex);
-        return `${toRelativePath(filePath)}${line.slice(colonIndex)}`;
+      const parsed = parseRipgrepContentLine(line);
+      if (parsed) {
+        const rel = toRelativePath(parsed.filePath);
+        fileSet.add(rel);
+        return `${rel}${parsed.rest}`;
       }
       return line;
     });
+    const uniqueFiles = [...fileSet];
     return {
       mode: "content",
-      numFiles: 0,
-      filenames: [],
+      numFiles: uniqueFiles.length,
+      filenames: uniqueFiles,
       content: finalLines.join("\n"),
       numLines: finalLines.length,
       ...(limited.appliedLimit !== undefined
@@ -311,17 +316,48 @@ async function runGrep(
   };
 }
 
+/**
+ * Parses a ripgrep content-mode output line to extract the file path.
+ * Handles both line-numbered output (filepath:linenum:content) and
+ * plain output (filepath:content), including Windows drive-letter paths.
+ */
+function parseRipgrepContentLine(
+  line: string,
+): { filePath: string; rest: string } | null {
+  // Match line with line numbers: filepath:linenum:content
+  const lineNumMatch = line.match(/^(.+?):(\d+):/);
+  if (lineNumMatch) {
+    return {
+      filePath: lineNumMatch[1],
+      rest: line.slice(lineNumMatch[1].length),
+    };
+  }
+  // Fallback for no line numbers: filepath:content
+  // Skip Windows drive letter (e.g., C:\...)
+  const startIdx =
+    line.length > 2 && line[1] === ":" && /^[a-zA-Z]$/.test(line[0]) ? 2 : 0;
+  const colonIndex = line.indexOf(":", startIdx);
+  if (colonIndex > 0) {
+    return {
+      filePath: line.slice(0, colonIndex),
+      rest: line.slice(colonIndex),
+    };
+  }
+  return null;
+}
+
 function applyHeadLimit<T>(
   items: T[],
   limit: number | undefined,
   offset = 0,
 ): { items: T[]; appliedLimit: number | undefined } {
+  const safeOffset = Math.max(0, offset);
   if (limit === 0) {
-    return { items: items.slice(offset), appliedLimit: undefined };
+    return { items: items.slice(safeOffset), appliedLimit: undefined };
   }
-  const effectiveLimit = limit ?? DEFAULT_HEAD_LIMIT;
-  const sliced = items.slice(offset, offset + effectiveLimit);
-  const wasTruncated = items.length - offset > effectiveLimit;
+  const effectiveLimit = Math.max(1, limit ?? DEFAULT_HEAD_LIMIT);
+  const sliced = items.slice(safeOffset, safeOffset + effectiveLimit);
+  const wasTruncated = items.length - safeOffset > effectiveLimit;
   return {
     items: sliced,
     appliedLimit: wasTruncated ? effectiveLimit : undefined,
