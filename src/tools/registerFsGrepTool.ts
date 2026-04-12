@@ -64,9 +64,9 @@ const inputSchema = z
     ).describe(
       "Limit output to first N lines/entries. Defaults to 250 when unspecified. Pass 0 for unlimited.",
     ),
-    offset: semanticNumber(
-      z.number().int().nonnegative().optional(),
-    ).describe("Skip first N lines/entries before applying head_limit."),
+    offset: semanticNumber(z.number().int().nonnegative().optional()).describe(
+      "Skip first N lines/entries before applying head_limit.",
+    ),
     multiline: semanticBoolean(z.boolean().optional()).describe(
       "Enable multiline mode.",
     ),

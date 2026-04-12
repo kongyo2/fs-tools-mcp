@@ -10,7 +10,9 @@ export function parsePDFPageRange(
   // Open-ended range: "5-"
   if (/^\d+-$/.test(trimmed)) {
     const firstPage = Number.parseInt(trimmed.slice(0, -1), 10);
-    return firstPage < 1 ? null : { firstPage, lastPage: Number.POSITIVE_INFINITY };
+    return firstPage < 1
+      ? null
+      : { firstPage, lastPage: Number.POSITIVE_INFINITY };
   }
   // Single page: "5"
   if (/^\d+$/.test(trimmed)) {
