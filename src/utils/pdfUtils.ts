@@ -7,30 +7,27 @@ export function parsePDFPageRange(
   if (!trimmed) {
     return null;
   }
-  if (trimmed.endsWith("-")) {
+  // Open-ended range: "5-"
+  if (/^\d+-$/.test(trimmed)) {
     const firstPage = Number.parseInt(trimmed.slice(0, -1), 10);
-    return Number.isNaN(firstPage) || firstPage < 1
-      ? null
-      : { firstPage, lastPage: Number.POSITIVE_INFINITY };
+    return firstPage < 1 ? null : { firstPage, lastPage: Number.POSITIVE_INFINITY };
   }
-  const dashIndex = trimmed.indexOf("-");
-  if (dashIndex === -1) {
+  // Single page: "5"
+  if (/^\d+$/.test(trimmed)) {
     const page = Number.parseInt(trimmed, 10);
-    return Number.isNaN(page) || page < 1
-      ? null
-      : { firstPage: page, lastPage: page };
+    return page < 1 ? null : { firstPage: page, lastPage: page };
   }
-  const firstPage = Number.parseInt(trimmed.slice(0, dashIndex), 10);
-  const lastPage = Number.parseInt(trimmed.slice(dashIndex + 1), 10);
-  if (
-    Number.isNaN(firstPage) ||
-    Number.isNaN(lastPage) ||
-    firstPage < 1 ||
-    lastPage < firstPage
-  ) {
-    return null;
+  // Range: "1-5"
+  if (/^\d+-\d+$/.test(trimmed)) {
+    const dashIndex = trimmed.indexOf("-");
+    const firstPage = Number.parseInt(trimmed.slice(0, dashIndex), 10);
+    const lastPage = Number.parseInt(trimmed.slice(dashIndex + 1), 10);
+    if (firstPage < 1 || lastPage < firstPage) {
+      return null;
+    }
+    return { firstPage, lastPage };
   }
-  return { firstPage, lastPage };
+  return null;
 }
 
 export function isPDFExtension(ext: string): boolean {

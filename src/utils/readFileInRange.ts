@@ -77,6 +77,17 @@ function readFileInRangeFast(
   const endLine =
     maxLines !== undefined ? offset + maxLines : Number.POSITIVE_INFINITY;
   const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+
+  if (text.length === 0) {
+    return {
+      content: "",
+      lineCount: 0,
+      totalLines: 0,
+      totalBytes: 0,
+      readBytes: 0,
+      mtimeMs,
+    };
+  }
   const selectedLines: string[] = [];
   let lineIndex = 0;
   let startPos = 0;
