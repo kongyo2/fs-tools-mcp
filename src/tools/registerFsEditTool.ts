@@ -13,7 +13,12 @@ import {
   writeTextContent,
 } from "../utils/file.js";
 import { readFileSyncWithMetadata } from "../utils/fileRead.js";
-import { safeStat, safeMkdir, type FsError, toFsError } from "../utils/fsResult.js";
+import {
+  safeStat,
+  safeMkdir,
+  type FsError,
+  toFsError,
+} from "../utils/fsResult.js";
 import { Result, ok, err } from "neverthrow";
 import { expandPath } from "../utils/path.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";

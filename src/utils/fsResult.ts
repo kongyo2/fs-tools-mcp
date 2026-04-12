@@ -40,9 +40,7 @@ export function safeStatSync(path: string): Result<Stats, FsError> {
   }
 }
 
-export function safeReaddirSync(
-  dirPath: string,
-): Result<Dirent[], FsError> {
+export function safeReaddirSync(dirPath: string): Result<Dirent[], FsError> {
   try {
     return ok(readdirSync(dirPath, { withFileTypes: true }));
   } catch (error) {
