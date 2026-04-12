@@ -3,7 +3,6 @@ import {
   existsSync,
   readFileSync,
   renameSync,
-  readdirSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -12,6 +11,7 @@ import { stat as statAsync } from "node:fs/promises";
 import { dirname, extname, join, relative, sep } from "node:path";
 import { formatFileSize } from "./format.js";
 import { isENOENT } from "./errors.js";
+import { safeReaddirSync } from "./fsResult.js";
 import { expandPath, getCwd } from "./path.js";
 import type { LineEndingType } from "./fileRead.js";
 
@@ -83,27 +83,23 @@ export function writeFileSyncAndFlush(
 }
 
 export function findSimilarFile(filePath: string): string | undefined {
-  try {
-    const dir = dirname(filePath);
-    const fileBaseName = filePath.slice(
-      filePath.lastIndexOf(sep) + 1,
-      filePath.lastIndexOf(extname(filePath)),
-    );
-    const files = readdirSync(dir, { withFileTypes: true });
-    const match = files.find(
-      (entry) =>
-        entry.isFile() &&
-        entry.name !== filePath &&
-        entry.name.slice(0, entry.name.lastIndexOf(extname(entry.name))) ===
-          fileBaseName,
-    );
-    return match?.name;
-  } catch (error) {
-    if (!isENOENT(error)) {
-      return undefined;
-    }
+  const dir = dirname(filePath);
+  const fileBaseName = filePath.slice(
+    filePath.lastIndexOf(sep) + 1,
+    filePath.lastIndexOf(extname(filePath)),
+  );
+  const dirResult = safeReaddirSync(dir);
+  if (dirResult.isErr()) {
     return undefined;
   }
+  const match = dirResult.value.find(
+    (entry) =>
+      entry.isFile() &&
+      entry.name !== filePath &&
+      entry.name.slice(0, entry.name.lastIndexOf(extname(entry.name))) ===
+        fileBaseName,
+  );
+  return match?.name;
 }
 
 export async function suggestPathUnderCwd(

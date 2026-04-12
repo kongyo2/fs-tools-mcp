@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { stat } from "node:fs/promises";
 import { z } from "zod/v4";
 import { glob } from "../utils/glob.js";
 import { FILE_NOT_FOUND_CWD_NOTE, suggestPathUnderCwd } from "../utils/file.js";
+import { safeStat } from "../utils/fsResult.js";
 import { expandPath, toRelativePath } from "../utils/path.js";
 
 const GLOB_TOOL_NAME = "fs_glob";
@@ -50,11 +50,9 @@ Usage:
       try {
         if (path) {
           const absolutePath = expandPath(path);
-          let stats;
-          try {
-            stats = await stat(absolutePath);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          const statResult = await safeStat(absolutePath);
+          if (statResult.isErr()) {
+            if (statResult.error.code === "ENOENT") {
               const cwdSuggestion = await suggestPathUnderCwd(absolutePath);
               let message = `Directory does not exist: ${path}. ${FILE_NOT_FOUND_CWD_NOTE} ${process.cwd()}.`;
               if (cwdSuggestion) {
@@ -62,9 +60,11 @@ Usage:
               }
               return errorResult(message);
             }
-            throw error;
+            return errorResult(
+              `Cannot access path: ${statResult.error.message}`,
+            );
           }
-          if (!stats.isDirectory()) {
+          if (!statResult.value.isDirectory()) {
             return errorResult(`Path is not a directory: ${path}`);
           }
         }
