@@ -1,6 +1,6 @@
 {
   "name": "@kongyo2/fs-tools-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP server that ports filesystem read/edit/write/glob/grep tools from the provided reference implementation.",
   "type": "module",
   "main": "dist/src/index.js",
