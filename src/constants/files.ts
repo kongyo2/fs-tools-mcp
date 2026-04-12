@@ -92,7 +92,7 @@ const BINARY_EXTENSIONS = new Set([
   ".fla",
   ".lockb",
   ".dat",
-  ".data"
+  ".data",
 ]);
 
 export function hasBinaryExtension(filePath: string): boolean {

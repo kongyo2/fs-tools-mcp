@@ -19,14 +19,21 @@ function convertLeadingTabsToSpaces(content: string): string {
 }
 
 function escapeForDiff(value: string): string {
-  return value.replaceAll("&", "<<:AMPERSAND_TOKEN:>>").replaceAll("$", "<<:DOLLAR_TOKEN:>>");
+  return value
+    .replaceAll("&", "<<:AMPERSAND_TOKEN:>>")
+    .replaceAll("$", "<<:DOLLAR_TOKEN:>>");
 }
 
 function unescapeFromDiff(value: string): string {
-  return value.replaceAll("<<:AMPERSAND_TOKEN:>>", "&").replaceAll("<<:DOLLAR_TOKEN:>>", "$");
+  return value
+    .replaceAll("<<:AMPERSAND_TOKEN:>>", "&")
+    .replaceAll("<<:DOLLAR_TOKEN:>>", "$");
 }
 
-export function countLinesChanged(patch: StructuredPatchHunk[], newFileContent?: string): { additions: number; removals: number } {
+export function countLinesChanged(
+  patch: StructuredPatchHunk[],
+  newFileContent?: string,
+): { additions: number; removals: number } {
   if (patch.length === 0 && newFileContent !== undefined) {
     return { additions: newFileContent.split(/\r?\n/).length, removals: 0 };
   }
@@ -44,7 +51,13 @@ export function countLinesChanged(patch: StructuredPatchHunk[], newFileContent?:
   return { additions, removals };
 }
 
-export function getPatchFromContents(params: { filePath: string; oldContent: string; newContent: string; ignoreWhitespace?: boolean; singleHunk?: boolean }): StructuredPatchHunk[] {
+export function getPatchFromContents(params: {
+  filePath: string;
+  oldContent: string;
+  newContent: string;
+  ignoreWhitespace?: boolean;
+  singleHunk?: boolean;
+}): StructuredPatchHunk[] {
   const result = structuredPatch(
     params.filePath,
     params.filePath,
@@ -55,21 +68,34 @@ export function getPatchFromContents(params: { filePath: string; oldContent: str
     {
       ignoreWhitespace: params.ignoreWhitespace ?? false,
       context: params.singleHunk ? 100000 : CONTEXT_LINES,
-      timeout: DIFF_TIMEOUT_MS
-    }
+      timeout: DIFF_TIMEOUT_MS,
+    },
   );
   return (result?.hunks ?? []).map((hunk) => ({
     ...hunk,
-    lines: hunk.lines.map(unescapeFromDiff)
+    lines: hunk.lines.map(unescapeFromDiff),
   }));
 }
 
-export function getPatchForDisplay(params: { filePath: string; fileContents: string; edits: FileEdit[]; ignoreWhitespace?: boolean }): StructuredPatchHunk[] {
-  const prepared = escapeForDiff(convertLeadingTabsToSpaces(params.fileContents));
+export function getPatchForDisplay(params: {
+  filePath: string;
+  fileContents: string;
+  edits: FileEdit[];
+  ignoreWhitespace?: boolean;
+}): StructuredPatchHunk[] {
+  const prepared = escapeForDiff(
+    convertLeadingTabsToSpaces(params.fileContents),
+  );
   const updated = params.edits.reduce((current, edit) => {
-    const oldString = escapeForDiff(convertLeadingTabsToSpaces(edit.old_string));
-    const newString = escapeForDiff(convertLeadingTabsToSpaces(edit.new_string));
-    return edit.replace_all ? current.replaceAll(oldString, () => newString) : current.replace(oldString, () => newString);
+    const oldString = escapeForDiff(
+      convertLeadingTabsToSpaces(edit.old_string),
+    );
+    const newString = escapeForDiff(
+      convertLeadingTabsToSpaces(edit.new_string),
+    );
+    return edit.replace_all
+      ? current.replaceAll(oldString, () => newString)
+      : current.replace(oldString, () => newString);
   }, prepared);
   const result = structuredPatch(
     params.filePath,
@@ -81,11 +107,11 @@ export function getPatchForDisplay(params: { filePath: string; fileContents: str
     {
       ignoreWhitespace: params.ignoreWhitespace ?? false,
       context: CONTEXT_LINES,
-      timeout: DIFF_TIMEOUT_MS
-    }
+      timeout: DIFF_TIMEOUT_MS,
+    },
   );
   return (result?.hunks ?? []).map((hunk) => ({
     ...hunk,
-    lines: hunk.lines.map(unescapeFromDiff)
+    lines: hunk.lines.map(unescapeFromDiff),
   }));
 }

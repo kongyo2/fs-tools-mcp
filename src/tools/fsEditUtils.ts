@@ -19,8 +19,8 @@ export function normalizeQuotes(value: string): string {
   return value
     .replaceAll(LEFT_SINGLE_CURLY_QUOTE, "'")
     .replaceAll(RIGHT_SINGLE_CURLY_QUOTE, "'")
-    .replaceAll(LEFT_DOUBLE_CURLY_QUOTE, "\"")
-    .replaceAll(RIGHT_DOUBLE_CURLY_QUOTE, "\"");
+    .replaceAll(LEFT_DOUBLE_CURLY_QUOTE, '"')
+    .replaceAll(RIGHT_DOUBLE_CURLY_QUOTE, '"');
 }
 
 export function stripTrailingWhitespace(value: string): string {
@@ -36,7 +36,10 @@ export function stripTrailingWhitespace(value: string): string {
   return result;
 }
 
-export function findActualString(fileContent: string, searchString: string): string | null {
+export function findActualString(
+  fileContent: string,
+  searchString: string,
+): string | null {
   if (fileContent.includes(searchString)) {
     return searchString;
   }
@@ -54,13 +57,29 @@ function isOpeningContext(chars: string[], index: number): boolean {
     return true;
   }
   const previous = chars[index - 1];
-  return previous === " " || previous === "\t" || previous === "\n" || previous === "\r" || previous === "(" || previous === "[" || previous === "{" || previous === "\u2014" || previous === "\u2013";
+  return (
+    previous === " " ||
+    previous === "\t" ||
+    previous === "\n" ||
+    previous === "\r" ||
+    previous === "(" ||
+    previous === "[" ||
+    previous === "{" ||
+    previous === "\u2014" ||
+    previous === "\u2013"
+  );
 }
 
 function applyCurlyDoubleQuotes(value: string): string {
   const chars = [...value];
   return chars
-    .map((char, index) => (char === "\"" ? (isOpeningContext(chars, index) ? LEFT_DOUBLE_CURLY_QUOTE : RIGHT_DOUBLE_CURLY_QUOTE) : char))
+    .map((char, index) =>
+      char === '"'
+        ? isOpeningContext(chars, index)
+          ? LEFT_DOUBLE_CURLY_QUOTE
+          : RIGHT_DOUBLE_CURLY_QUOTE
+        : char,
+    )
     .join("");
 }
 
@@ -73,22 +92,33 @@ function applyCurlySingleQuotes(value: string): string {
       }
       const previous = index > 0 ? chars[index - 1] : undefined;
       const next = index < chars.length - 1 ? chars[index + 1] : undefined;
-      const previousIsLetter = previous !== undefined && /\p{L}/u.test(previous);
+      const previousIsLetter =
+        previous !== undefined && /\p{L}/u.test(previous);
       const nextIsLetter = next !== undefined && /\p{L}/u.test(next);
       if (previousIsLetter && nextIsLetter) {
         return RIGHT_SINGLE_CURLY_QUOTE;
       }
-      return isOpeningContext(chars, index) ? LEFT_SINGLE_CURLY_QUOTE : RIGHT_SINGLE_CURLY_QUOTE;
+      return isOpeningContext(chars, index)
+        ? LEFT_SINGLE_CURLY_QUOTE
+        : RIGHT_SINGLE_CURLY_QUOTE;
     })
     .join("");
 }
 
-export function preserveQuoteStyle(oldString: string, actualOldString: string, newString: string): string {
+export function preserveQuoteStyle(
+  oldString: string,
+  actualOldString: string,
+  newString: string,
+): string {
   if (oldString === actualOldString) {
     return newString;
   }
-  const hasDoubleQuotes = actualOldString.includes(LEFT_DOUBLE_CURLY_QUOTE) || actualOldString.includes(RIGHT_DOUBLE_CURLY_QUOTE);
-  const hasSingleQuotes = actualOldString.includes(LEFT_SINGLE_CURLY_QUOTE) || actualOldString.includes(RIGHT_SINGLE_CURLY_QUOTE);
+  const hasDoubleQuotes =
+    actualOldString.includes(LEFT_DOUBLE_CURLY_QUOTE) ||
+    actualOldString.includes(RIGHT_DOUBLE_CURLY_QUOTE);
+  const hasSingleQuotes =
+    actualOldString.includes(LEFT_SINGLE_CURLY_QUOTE) ||
+    actualOldString.includes(RIGHT_SINGLE_CURLY_QUOTE);
   let result = newString;
   if (hasDoubleQuotes) {
     result = applyCurlyDoubleQuotes(result);
@@ -99,18 +129,34 @@ export function preserveQuoteStyle(oldString: string, actualOldString: string, n
   return result;
 }
 
-export function applyEditToFile(originalContent: string, oldString: string, newString: string, replaceAll = false): string {
+export function applyEditToFile(
+  originalContent: string,
+  oldString: string,
+  newString: string,
+  replaceAll = false,
+): string {
   const replacer = replaceAll
-    ? (content: string, search: string, replace: string) => content.replaceAll(search, () => replace)
-    : (content: string, search: string, replace: string) => content.replace(search, () => replace);
+    ? (content: string, search: string, replace: string) =>
+        content.replaceAll(search, () => replace)
+    : (content: string, search: string, replace: string) =>
+        content.replace(search, () => replace);
   if (newString !== "") {
     return replacer(originalContent, oldString, newString);
   }
-  const stripTrailingNewline = !oldString.endsWith("\n") && originalContent.includes(`${oldString}\n`);
-  return stripTrailingNewline ? replacer(originalContent, `${oldString}\n`, newString) : replacer(originalContent, oldString, newString);
+  const stripTrailingNewline =
+    !oldString.endsWith("\n") && originalContent.includes(`${oldString}\n`);
+  return stripTrailingNewline
+    ? replacer(originalContent, `${oldString}\n`, newString)
+    : replacer(originalContent, oldString, newString);
 }
 
-export function getPatchForEdit(params: { filePath: string; fileContents: string; oldString: string; newString: string; replaceAll?: boolean }): { patch: StructuredPatchHunk[]; updatedFile: string } {
+export function getPatchForEdit(params: {
+  filePath: string;
+  fileContents: string;
+  oldString: string;
+  newString: string;
+  replaceAll?: boolean;
+}): { patch: StructuredPatchHunk[]; updatedFile: string } {
   return getPatchForEdits({
     filePath: params.filePath,
     fileContents: params.fileContents,
@@ -118,43 +164,65 @@ export function getPatchForEdit(params: { filePath: string; fileContents: string
       {
         old_string: params.oldString,
         new_string: params.newString,
-        replace_all: params.replaceAll ?? false
-      }
-    ]
+        replace_all: params.replaceAll ?? false,
+      },
+    ],
   });
 }
 
-export function getPatchForEdits(params: { filePath: string; fileContents: string; edits: FileEdit[] }): { patch: StructuredPatchHunk[]; updatedFile: string } {
+export function getPatchForEdits(params: {
+  filePath: string;
+  fileContents: string;
+  edits: FileEdit[];
+}): { patch: StructuredPatchHunk[]; updatedFile: string } {
   let updatedFile = params.fileContents;
   const appliedNewStrings: string[] = [];
   for (const edit of params.edits) {
     const oldStringToCheck = edit.old_string.replace(/\n+$/, "");
     for (const previousNewString of appliedNewStrings) {
-      if (oldStringToCheck !== "" && previousNewString.includes(oldStringToCheck)) {
-        throw new Error("Cannot edit file: old_string is a substring of a new_string from a previous edit.");
+      if (
+        oldStringToCheck !== "" &&
+        previousNewString.includes(oldStringToCheck)
+      ) {
+        throw new Error(
+          "Cannot edit file: old_string is a substring of a new_string from a previous edit.",
+        );
       }
     }
     const previousContent = updatedFile;
-    updatedFile = edit.old_string === "" ? edit.new_string : applyEditToFile(updatedFile, edit.old_string, edit.new_string, edit.replace_all);
+    updatedFile =
+      edit.old_string === ""
+        ? edit.new_string
+        : applyEditToFile(
+            updatedFile,
+            edit.old_string,
+            edit.new_string,
+            edit.replace_all,
+          );
     if (updatedFile === previousContent) {
       throw new Error("String not found in file. Failed to apply edit.");
     }
     appliedNewStrings.push(edit.new_string);
   }
   if (updatedFile === params.fileContents) {
-    throw new Error("Original and edited file match exactly. Failed to apply edit.");
+    throw new Error(
+      "Original and edited file match exactly. Failed to apply edit.",
+    );
   }
   return {
     patch: getPatchFromContents({
       filePath: params.filePath,
       oldContent: params.fileContents,
-      newContent: updatedFile
+      newContent: updatedFile,
     }),
-    updatedFile
+    updatedFile,
   };
 }
 
-export function normalizeFileEditInput(input: { file_path: string; edits: FileEdit[] }): { file_path: string; edits: FileEdit[] } {
+export function normalizeFileEditInput(input: {
+  file_path: string;
+  edits: FileEdit[];
+}): { file_path: string; edits: FileEdit[] } {
   if (input.edits.length === 0) {
     return input;
   }
@@ -165,12 +233,15 @@ export function normalizeFileEditInput(input: { file_path: string; edits: FileEd
       file_path: input.file_path,
       edits: input.edits.map((edit) => ({
         ...edit,
-        new_string: fileContent.includes(edit.old_string) || isMarkdown ? edit.new_string : stripTrailingWhitespace(edit.new_string)
-      }))
+        new_string:
+          fileContent.includes(edit.old_string) || isMarkdown
+            ? edit.new_string
+            : stripTrailingWhitespace(edit.new_string),
+      })),
     };
   } catch (error) {
     if (!isENOENT(error)) {
-      throw new Error(errorMessage(error));
+      throw new Error(errorMessage(error), { cause: error });
     }
   }
   return input;

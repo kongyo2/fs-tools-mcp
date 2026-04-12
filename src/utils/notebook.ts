@@ -53,23 +53,27 @@ function processOutputText(text: string | string[] | undefined): string {
   return Array.isArray(text) ? text.join("") : text;
 }
 
-function extractImage(data: Record<string, unknown>): NotebookOutputImage | undefined {
+function extractImage(
+  data: Record<string, unknown>,
+): NotebookOutputImage | undefined {
   if (typeof data["image/png"] === "string") {
     return {
       image_data: data["image/png"].replace(/\s/g, ""),
-      media_type: "image/png"
+      media_type: "image/png",
     };
   }
   if (typeof data["image/jpeg"] === "string") {
     return {
       image_data: data["image/jpeg"].replace(/\s/g, ""),
-      media_type: "image/jpeg"
+      media_type: "image/jpeg",
     };
   }
   return undefined;
 }
 
-function isLargeOutputs(outputs: (NotebookCellSourceOutput | undefined)[]): boolean {
+function isLargeOutputs(
+  outputs: (NotebookCellSourceOutput | undefined)[],
+): boolean {
   let size = 0;
   for (const output of outputs) {
     if (!output) {
@@ -88,41 +92,65 @@ function processOutput(output: NotebookCellOutput): NotebookCellSourceOutput {
     case "stream":
       return {
         output_type: output.output_type,
-        text: processOutputText(output.text)
+        text: processOutputText(output.text),
       };
     case "execute_result":
     case "display_data":
       return {
         output_type: output.output_type,
-        text: processOutputText(output.data?.["text/plain"] as string | string[] | undefined),
-        image: output.data ? extractImage(output.data) : undefined
+        text: processOutputText(
+          output.data?.["text/plain"] as string | string[] | undefined,
+        ),
+        image: output.data ? extractImage(output.data) : undefined,
       };
     case "error":
       return {
         output_type: output.output_type,
-        text: processOutputText(`${output.ename ?? "Error"}: ${output.evalue ?? ""}\n${(output.traceback ?? []).join("\n")}`)
+        text: processOutputText(
+          `${output.ename ?? "Error"}: ${output.evalue ?? ""}\n${(output.traceback ?? []).join("\n")}`,
+        ),
       };
     default:
       return {
         output_type: output.output_type,
-        text: processOutputText(output.text)
+        text: processOutputText(output.text),
       };
   }
 }
 
-function processCell(cell: NotebookCell, index: number, codeLanguage: string, includeLargeOutputs: boolean): NotebookCellSource {
+function processCell(
+  cell: NotebookCell,
+  index: number,
+  codeLanguage: string,
+  includeLargeOutputs: boolean,
+): NotebookCellSource {
   const outputs = cell.outputs?.map(processOutput);
   return {
     cellType: cell.cell_type,
     source: Array.isArray(cell.source) ? cell.source.join("") : cell.source,
-    execution_count: cell.cell_type === "code" ? cell.execution_count ?? undefined : undefined,
+    execution_count:
+      cell.cell_type === "code"
+        ? (cell.execution_count ?? undefined)
+        : undefined,
     cell_id: cell.id ?? `cell-${index}`,
     language: cell.cell_type === "code" ? codeLanguage : undefined,
-    outputs: !outputs ? undefined : includeLargeOutputs || !isLargeOutputs(outputs) ? outputs : [{ output_type: "stream", text: `Outputs are too large to include. Use jq to inspect this notebook cell directly.` }]
+    outputs: !outputs
+      ? undefined
+      : includeLargeOutputs || !isLargeOutputs(outputs)
+        ? outputs
+        : [
+            {
+              output_type: "stream",
+              text: `Outputs are too large to include. Use jq to inspect this notebook cell directly.`,
+            },
+          ],
   };
 }
 
-export async function readNotebook(notebookPath: string, cellId?: string): Promise<NotebookCellSource[]> {
+export async function readNotebook(
+  notebookPath: string,
+  cellId?: string,
+): Promise<NotebookCellSource[]> {
   const { readFile } = await import("node:fs/promises");
   const content = await readFile(notebookPath, "utf8");
   const notebook = JSON.parse(content) as NotebookContent;
@@ -132,7 +160,16 @@ export async function readNotebook(notebookPath: string, cellId?: string): Promi
     if (!targetCell) {
       throw new Error(`Cell with ID "${cellId}" not found in notebook`);
     }
-    return [processCell(targetCell, notebook.cells.indexOf(targetCell), language, true)];
+    return [
+      processCell(
+        targetCell,
+        notebook.cells.indexOf(targetCell),
+        language,
+        true,
+      ),
+    ];
   }
-  return notebook.cells.map((cell, index) => processCell(cell, index, language, false));
+  return notebook.cells.map((cell, index) =>
+    processCell(cell, index, language, false),
+  );
 }

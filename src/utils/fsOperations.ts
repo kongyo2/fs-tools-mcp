@@ -1,7 +1,15 @@
 import * as fs from "node:fs";
-import { open, readFile as readFileAsync, readdir, stat } from "node:fs/promises";
+import {
+  open,
+  readFile as readFileAsync,
+  readdir,
+  stat,
+} from "node:fs/promises";
 
-export async function readFileBytes(path: string, maxBytes?: number): Promise<Buffer> {
+export async function readFileBytes(
+  path: string,
+  maxBytes?: number,
+): Promise<Buffer> {
   if (maxBytes === undefined) {
     return await readFileAsync(path);
   }
@@ -12,7 +20,12 @@ export async function readFileBytes(path: string, maxBytes?: number): Promise<Bu
     const buffer = Buffer.allocUnsafe(readSize);
     let offset = 0;
     while (offset < readSize) {
-      const { bytesRead } = await fileHandle.read(buffer, offset, readSize - offset, offset);
+      const { bytesRead } = await fileHandle.read(
+        buffer,
+        offset,
+        readSize - offset,
+        offset,
+      );
       if (bytesRead === 0) {
         break;
       }
@@ -27,5 +40,5 @@ export async function readFileBytes(path: string, maxBytes?: number): Promise<Bu
 export const fsSync = fs;
 export const fsAsync = {
   readdir,
-  stat
+  stat,
 };

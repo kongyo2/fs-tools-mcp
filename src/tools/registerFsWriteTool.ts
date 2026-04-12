@@ -9,17 +9,19 @@ import { expandPath } from "../utils/path.js";
 
 const FILE_WRITE_TOOL_NAME = "fs_write";
 
-const inputSchema = z.object({
-  file_path: z.string().describe("The absolute path to the file to write"),
-  content: z.string().describe("The content to write to the file")
-}).strict();
+const inputSchema = z
+  .object({
+    file_path: z.string().describe("The absolute path to the file to write"),
+    content: z.string().describe("The content to write to the file"),
+  })
+  .strict();
 
 const hunkSchema = z.object({
   oldStart: z.number(),
   oldLines: z.number(),
   newStart: z.number(),
   newLines: z.number(),
-  lines: z.array(z.string())
+  lines: z.array(z.string()),
 });
 
 const outputSchema = z.object({
@@ -27,7 +29,7 @@ const outputSchema = z.object({
   filePath: z.string(),
   content: z.string(),
   structuredPatch: z.array(hunkSchema),
-  originalFile: z.string().nullable()
+  originalFile: z.string().nullable(),
 });
 
 export function registerFsWriteTool(server: McpServer): void {
@@ -46,8 +48,8 @@ Usage:
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
-        openWorldHint: false
-      }
+        openWorldHint: false,
+      },
     },
     async ({ file_path, content }) => {
       try {
@@ -75,20 +77,25 @@ Usage:
               {
                 old_string: meta.content,
                 new_string: content,
-                replace_all: false
-              }
-            ]
+                replace_all: false,
+              },
+            ],
           });
           const data = {
             type: "update" as const,
             filePath: file_path,
             content,
             structuredPatch: patch,
-            originalFile: meta.content
+            originalFile: meta.content,
           };
           return {
-            content: [{ type: "text", text: `The file ${file_path} has been updated successfully.` }],
-            structuredContent: data
+            content: [
+              {
+                type: "text",
+                text: `The file ${file_path} has been updated successfully.`,
+              },
+            ],
+            structuredContent: data,
           };
         }
 
@@ -97,22 +104,29 @@ Usage:
           filePath: file_path,
           content,
           structuredPatch: [],
-          originalFile: null
+          originalFile: null,
         };
         return {
-          content: [{ type: "text", text: `File created successfully at: ${file_path}` }],
-          structuredContent: data
+          content: [
+            {
+              type: "text",
+              text: `File created successfully at: ${file_path}`,
+            },
+          ],
+          structuredContent: data,
         };
       } catch (error) {
-        return errorResult(error instanceof Error ? error.message : String(error));
+        return errorResult(
+          error instanceof Error ? error.message : String(error),
+        );
       }
-    }
+    },
   );
 }
 
 function errorResult(message: string): { content: any[]; isError: true } {
   return {
     content: [{ type: "text", text: message }],
-    isError: true
+    isError: true,
   };
 }

@@ -24,7 +24,9 @@ test("readFileInRange truncates by bytes when requested", async () => {
   try {
     const file = join(dir, "sample.txt");
     await writeFile(file, "alpha\nbeta\ngamma\n", "utf8");
-    const result = await readFileInRange(file, 0, undefined, 9, undefined, { truncateOnByteLimit: true });
+    const result = await readFileInRange(file, 0, undefined, 9, undefined, {
+      truncateOnByteLimit: true,
+    });
     assert.equal(result.content, "alpha");
     assert.equal(result.truncatedByBytes, true);
   } finally {

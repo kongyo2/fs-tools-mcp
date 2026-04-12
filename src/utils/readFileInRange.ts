@@ -15,7 +15,10 @@ export type ReadFileRangeResult = {
 };
 
 export class FileTooLargeError extends Error {
-  constructor(public readonly sizeInBytes: number, public readonly maxSizeBytes: number) {
+  constructor(
+    public readonly sizeInBytes: number,
+    public readonly maxSizeBytes: number,
+  ) {
     super(formatReadTooLargeMessage(sizeInBytes, maxSizeBytes));
     this.name = "FileTooLargeError";
   }
@@ -27,26 +30,52 @@ export async function readFileInRange(
   maxLines?: number,
   maxBytes?: number,
   signal?: AbortSignal,
-  options?: { truncateOnByteLimit?: boolean }
+  options?: { truncateOnByteLimit?: boolean },
 ): Promise<ReadFileRangeResult> {
   signal?.throwIfAborted();
   const truncateOnByteLimit = options?.truncateOnByteLimit ?? false;
   const stats = await stat(filePath);
   if (stats.isDirectory()) {
-    throw new Error(`EISDIR: illegal operation on a directory, read '${filePath}'`);
+    throw new Error(
+      `EISDIR: illegal operation on a directory, read '${filePath}'`,
+    );
   }
   if (stats.isFile() && stats.size < FAST_PATH_MAX_SIZE) {
-    if (!truncateOnByteLimit && maxBytes !== undefined && stats.size > maxBytes) {
+    if (
+      !truncateOnByteLimit &&
+      maxBytes !== undefined &&
+      stats.size > maxBytes
+    ) {
       throw new FileTooLargeError(stats.size, maxBytes);
     }
     const text = await readFile(filePath, { encoding: "utf8", signal });
-    return readFileInRangeFast(text, stats.mtimeMs, offset, maxLines, truncateOnByteLimit ? maxBytes : undefined);
+    return readFileInRangeFast(
+      text,
+      stats.mtimeMs,
+      offset,
+      maxLines,
+      truncateOnByteLimit ? maxBytes : undefined,
+    );
   }
-  return await readFileInRangeStreaming(filePath, offset, maxLines, maxBytes, truncateOnByteLimit, signal);
+  return await readFileInRangeStreaming(
+    filePath,
+    offset,
+    maxLines,
+    maxBytes,
+    truncateOnByteLimit,
+    signal,
+  );
 }
 
-function readFileInRangeFast(raw: string, mtimeMs: number, offset: number, maxLines: number | undefined, truncateAtBytes: number | undefined): ReadFileRangeResult {
-  const endLine = maxLines !== undefined ? offset + maxLines : Number.POSITIVE_INFINITY;
+function readFileInRangeFast(
+  raw: string,
+  mtimeMs: number,
+  offset: number,
+  maxLines: number | undefined,
+  truncateAtBytes: number | undefined,
+): ReadFileRangeResult {
+  const endLine =
+    maxLines !== undefined ? offset + maxLines : Number.POSITIVE_INFINITY;
   const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
   const selectedLines: string[] = [];
   let lineIndex = 0;
@@ -57,7 +86,8 @@ function readFileInRangeFast(raw: string, mtimeMs: number, offset: number, maxLi
   const tryPush = (line: string): boolean => {
     if (truncateAtBytes !== undefined) {
       const separatorBytes = selectedLines.length > 0 ? 1 : 0;
-      const nextBytes = selectedBytes + separatorBytes + Buffer.byteLength(line);
+      const nextBytes =
+        selectedBytes + separatorBytes + Buffer.byteLength(line);
       if (nextBytes > truncateAtBytes) {
         truncatedByBytes = true;
         return false;
@@ -99,7 +129,7 @@ function readFileInRangeFast(raw: string, mtimeMs: number, offset: number, maxLi
     totalBytes: Buffer.byteLength(text, "utf8"),
     readBytes: Buffer.byteLength(content, "utf8"),
     mtimeMs,
-    ...(truncatedByBytes ? { truncatedByBytes: true } : {})
+    ...(truncatedByBytes ? { truncatedByBytes: true } : {}),
   };
 }
 
@@ -109,18 +139,19 @@ async function readFileInRangeStreaming(
   maxLines: number | undefined,
   maxBytes: number | undefined,
   truncateOnByteLimit: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<ReadFileRangeResult> {
   return await new Promise((resolve, reject) => {
     const stream = createReadStream(filePath, {
       encoding: "utf8",
       highWaterMark: 512 * 1024,
-      ...(signal ? { signal } : {})
+      ...(signal ? { signal } : {}),
     });
 
     const state = {
       offset,
-      endLine: maxLines !== undefined ? offset + maxLines : Number.POSITIVE_INFINITY,
+      endLine:
+        maxLines !== undefined ? offset + maxLines : Number.POSITIVE_INFINITY,
       maxBytes,
       truncateOnByteLimit,
       totalBytesRead: 0,
@@ -130,7 +161,7 @@ async function readFileInRangeStreaming(
       selectedLines: [] as string[],
       partial: "",
       firstChunk: true,
-      mtimeMs: 0
+      mtimeMs: 0,
     };
 
     stream.once("open", async () => {
@@ -142,7 +173,8 @@ async function readFileInRangeStreaming(
     });
 
     stream.on("data", (chunk: string | Buffer) => {
-      let currentChunk = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      let currentChunk =
+        typeof chunk === "string" ? chunk : chunk.toString("utf8");
       if (state.firstChunk) {
         state.firstChunk = false;
         if (currentChunk.charCodeAt(0) === 0xfeff) {
@@ -151,25 +183,38 @@ async function readFileInRangeStreaming(
       }
 
       state.totalBytesRead += Buffer.byteLength(currentChunk);
-      if (!state.truncateOnByteLimit && state.maxBytes !== undefined && state.totalBytesRead > state.maxBytes) {
-        stream.destroy(new FileTooLargeError(state.totalBytesRead, state.maxBytes));
+      if (
+        !state.truncateOnByteLimit &&
+        state.maxBytes !== undefined &&
+        state.totalBytesRead > state.maxBytes
+      ) {
+        stream.destroy(
+          new FileTooLargeError(state.totalBytesRead, state.maxBytes),
+        );
         return;
       }
 
-      const data = state.partial.length > 0 ? `${state.partial}${currentChunk}` : currentChunk;
+      const data =
+        state.partial.length > 0
+          ? `${state.partial}${currentChunk}`
+          : currentChunk;
       state.partial = "";
 
       let startPos = 0;
       let newlinePos = data.indexOf("\n", startPos);
       while (newlinePos !== -1) {
-        if (state.currentLineIndex >= state.offset && state.currentLineIndex < state.endLine) {
+        if (
+          state.currentLineIndex >= state.offset &&
+          state.currentLineIndex < state.endLine
+        ) {
           let line = data.slice(startPos, newlinePos);
           if (line.endsWith("\r")) {
             line = line.slice(0, -1);
           }
           if (state.truncateOnByteLimit && state.maxBytes !== undefined) {
             const separatorBytes = state.selectedLines.length > 0 ? 1 : 0;
-            const nextBytes = state.selectedBytes + separatorBytes + Buffer.byteLength(line);
+            const nextBytes =
+              state.selectedBytes + separatorBytes + Buffer.byteLength(line);
             if (nextBytes > state.maxBytes) {
               state.truncatedByBytes = true;
               state.endLine = state.currentLineIndex;
@@ -186,11 +231,16 @@ async function readFileInRangeStreaming(
         newlinePos = data.indexOf("\n", startPos);
       }
 
-      if (startPos < data.length && state.currentLineIndex >= state.offset && state.currentLineIndex < state.endLine) {
+      if (
+        startPos < data.length &&
+        state.currentLineIndex >= state.offset &&
+        state.currentLineIndex < state.endLine
+      ) {
         const fragment = data.slice(startPos);
         if (state.truncateOnByteLimit && state.maxBytes !== undefined) {
           const separatorBytes = state.selectedLines.length > 0 ? 1 : 0;
-          const nextBytes = state.selectedBytes + separatorBytes + Buffer.byteLength(fragment);
+          const nextBytes =
+            state.selectedBytes + separatorBytes + Buffer.byteLength(fragment);
           if (nextBytes > state.maxBytes) {
             state.truncatedByBytes = true;
             state.endLine = state.currentLineIndex;
@@ -206,10 +256,14 @@ async function readFileInRangeStreaming(
       if (line.endsWith("\r")) {
         line = line.slice(0, -1);
       }
-      if (state.currentLineIndex >= state.offset && state.currentLineIndex < state.endLine) {
+      if (
+        state.currentLineIndex >= state.offset &&
+        state.currentLineIndex < state.endLine
+      ) {
         if (state.truncateOnByteLimit && state.maxBytes !== undefined) {
           const separatorBytes = state.selectedLines.length > 0 ? 1 : 0;
-          const nextBytes = state.selectedBytes + separatorBytes + Buffer.byteLength(line);
+          const nextBytes =
+            state.selectedBytes + separatorBytes + Buffer.byteLength(line);
           if (nextBytes > state.maxBytes) {
             state.truncatedByBytes = true;
           } else {
@@ -228,7 +282,7 @@ async function readFileInRangeStreaming(
         totalBytes: state.totalBytesRead,
         readBytes: Buffer.byteLength(content, "utf8"),
         mtimeMs: state.mtimeMs,
-        ...(state.truncatedByBytes ? { truncatedByBytes: true } : {})
+        ...(state.truncatedByBytes ? { truncatedByBytes: true } : {}),
       });
     });
 
