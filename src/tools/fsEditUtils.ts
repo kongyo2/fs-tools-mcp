@@ -241,7 +241,7 @@ export function normalizeFileEditInput(input: {
     };
   } catch (error) {
     if (!isENOENT(error)) {
-      throw new Error(errorMessage(error));
+      throw new Error(errorMessage(error), { cause: error });
     }
   }
   return input;

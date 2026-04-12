@@ -22,9 +22,9 @@ async function run(
   try {
     await fn();
     passed += 1;
-    console.log(`PASS ${name}`);
+    process.stdout.write(`PASS ${name}\n`);
   } catch (error) {
-    console.error(`FAIL ${name}`);
+    process.stderr.write(`FAIL ${name}\n`);
     throw error;
   }
 }
@@ -141,4 +141,4 @@ await run("extractGlobBaseDirectory splits absolute glob patterns", () => {
   assert.equal(extracted.relativePattern, "**/*.ts");
 });
 
-console.log(`PASS summary: ${passed} tests`);
+process.stdout.write(`PASS summary: ${passed} tests\n`);
