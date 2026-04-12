@@ -1,16 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { mkdir, stat } from "node:fs/promises";
-import { dirname, isAbsolute } from "node:path";
+import { dirname } from "node:path";
 import { z } from "zod/v4";
-import type { SessionState } from "../state.js";
 import { getPatchForEdit, findActualString, preserveQuoteStyle } from "./fsEditUtils.js";
-import { FILE_NOT_FOUND_CWD_NOTE, findSimilarFile, getFileModificationTime, suggestPathUnderCwd, writeTextContent } from "../utils/file.js";
+import { FILE_NOT_FOUND_CWD_NOTE, findSimilarFile, suggestPathUnderCwd, writeTextContent } from "../utils/file.js";
 import { readFileSyncWithMetadata } from "../utils/fileRead.js";
 import { expandPath } from "../utils/path.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
 
 const FILE_EDIT_TOOL_NAME = "fs_edit";
-const FILE_UNEXPECTEDLY_MODIFIED_ERROR = "File has been unexpectedly modified. Read it again before attempting to write it.";
 const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024;
 
 const inputSchema = z.object({
@@ -38,7 +36,7 @@ const outputSchema = z.object({
   replaceAll: z.boolean()
 });
 
-export function registerFsEditTool(server: McpServer, state: SessionState): void {
+export function registerFsEditTool(server: McpServer): void {
   server.registerTool(
     FILE_EDIT_TOOL_NAME,
     {
@@ -55,7 +53,7 @@ export function registerFsEditTool(server: McpServer, state: SessionState): void
     },
     async ({ file_path, old_string, new_string, replace_all = false }) => {
       try {
-        const validationError = await validateEditInput(file_path, old_string, new_string, replace_all, state);
+        const validationError = await validateEditInput(file_path, old_string, new_string, replace_all);
         if (validationError) {
           return errorResult(validationError);
         }
@@ -64,13 +62,6 @@ export function registerFsEditTool(server: McpServer, state: SessionState): void
         await mkdir(dirname(absoluteFilePath), { recursive: true });
 
         const currentMeta = readFileForEdit(absoluteFilePath);
-        if (currentMeta.fileExists) {
-          const lastWriteTime = getFileModificationTime(absoluteFilePath);
-          const lastRead = state.readFileState.get(absoluteFilePath);
-          if (!lastRead || lastWriteTime > lastRead.timestamp) {
-            throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR);
-          }
-        }
 
         const actualOldString = findActualString(currentMeta.content, old_string) ?? old_string;
         const actualNewString = preserveQuoteStyle(old_string, actualOldString, new_string);
@@ -83,10 +74,6 @@ export function registerFsEditTool(server: McpServer, state: SessionState): void
         });
 
         writeTextContent(absoluteFilePath, updatedFile, currentMeta.encoding, currentMeta.lineEndings);
-        state.readFileState.set(absoluteFilePath, {
-          content: updatedFile,
-          timestamp: getFileModificationTime(absoluteFilePath)
-        });
 
         const data = {
           filePath: file_path,
@@ -114,7 +101,7 @@ export function registerFsEditTool(server: McpServer, state: SessionState): void
   );
 }
 
-async function validateEditInput(filePath: string, oldString: string, newString: string, replaceAll: boolean, state: SessionState): Promise<string | null> {
+async function validateEditInput(filePath: string, oldString: string, newString: string, replaceAll: boolean): Promise<string | null> {
   const fullFilePath = expandPath(filePath);
 
   if (oldString === newString) {
@@ -166,16 +153,6 @@ async function validateEditInput(filePath: string, oldString: string, newString:
     return "File is a Jupyter Notebook. Use fs_read to inspect it and fs_write if you need a full rewrite.";
   }
 
-  const lastRead = state.readFileState.get(fullFilePath);
-  if (!lastRead || lastRead.isPartialView) {
-    return `File has not been read yet. Read it first before writing to it.${isAbsolute(filePath) ? "" : " The provided path was not absolute."}`;
-  }
-
-  const lastWriteTime = getFileModificationTime(fullFilePath);
-  if (lastWriteTime > lastRead.timestamp) {
-    return "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.";
-  }
-
   const actualOldString = findActualString(fileContent, oldString);
   if (!actualOldString) {
     return `String to replace not found in file.\nString: ${oldString}`;
@@ -189,12 +166,11 @@ async function validateEditInput(filePath: string, oldString: string, newString:
   return null;
 }
 
-function readFileForEdit(absoluteFilePath: string): { content: string; fileExists: boolean; encoding: BufferEncoding; lineEndings: "CRLF" | "LF" } {
+function readFileForEdit(absoluteFilePath: string): { content: string; encoding: BufferEncoding; lineEndings: "CRLF" | "LF" } {
   try {
     const meta = readFileSyncWithMetadata(absoluteFilePath);
     return {
       content: meta.content,
-      fileExists: true,
       encoding: meta.encoding,
       lineEndings: meta.lineEndings
     };
@@ -202,7 +178,6 @@ function readFileForEdit(absoluteFilePath: string): { content: string; fileExist
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return {
         content: "",
-        fileExists: false,
         encoding: "utf8",
         lineEndings: "LF"
       };

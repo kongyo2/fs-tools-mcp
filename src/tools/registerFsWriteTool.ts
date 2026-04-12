@@ -1,15 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod/v4";
-import type { SessionState } from "../state.js";
 import { getPatchForDisplay } from "../utils/diff.js";
-import { getFileModificationTime, writeTextContent } from "../utils/file.js";
+import { writeTextContent } from "../utils/file.js";
 import { readFileSyncWithMetadata } from "../utils/fileRead.js";
 import { expandPath } from "../utils/path.js";
 
 const FILE_WRITE_TOOL_NAME = "fs_write";
-const FILE_UNEXPECTEDLY_MODIFIED_ERROR = "File has been unexpectedly modified. Read it again before attempting to write it.";
 
 const inputSchema = z.object({
   file_path: z.string().describe("The absolute path to the file to write"),
@@ -32,7 +30,7 @@ const outputSchema = z.object({
   originalFile: z.string().nullable()
 });
 
-export function registerFsWriteTool(server: McpServer, state: SessionState): void {
+export function registerFsWriteTool(server: McpServer): void {
   server.registerTool(
     FILE_WRITE_TOOL_NAME,
     {
@@ -41,7 +39,6 @@ export function registerFsWriteTool(server: McpServer, state: SessionState): voi
 
 Usage:
 - This tool will overwrite the existing file if there is one at the provided path.
-- If this is an existing file, you must use fs_read first to read the file's contents.
 - Prefer fs_edit for modifying existing files and fs_write for creation or complete rewrites.`,
       inputSchema,
       outputSchema,
@@ -54,11 +51,6 @@ Usage:
     },
     async ({ file_path, content }) => {
       try {
-        const validationError = await validateWriteInput(file_path, state);
-        if (validationError) {
-          return errorResult(validationError);
-        }
-
         const fullFilePath = expandPath(file_path);
         await mkdir(dirname(fullFilePath), { recursive: true });
 
@@ -73,19 +65,7 @@ Usage:
           }
         }
 
-        if (meta !== null) {
-          const lastWriteTime = getFileModificationTime(fullFilePath);
-          const lastRead = state.readFileState.get(fullFilePath);
-          if (!lastRead || lastWriteTime > lastRead.timestamp) {
-            throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR);
-          }
-        }
-
         writeTextContent(fullFilePath, content, meta?.encoding ?? "utf8", "LF");
-        state.readFileState.set(fullFilePath, {
-          content,
-          timestamp: getFileModificationTime(fullFilePath)
-        });
 
         if (meta !== null) {
           const patch = getPatchForDisplay({
@@ -128,26 +108,6 @@ Usage:
       }
     }
   );
-}
-
-async function validateWriteInput(filePath: string, state: SessionState): Promise<string | null> {
-  const fullFilePath = expandPath(filePath);
-  try {
-    const fileStat = await stat(fullFilePath);
-    const readTimestamp = state.readFileState.get(fullFilePath);
-    if (!readTimestamp || readTimestamp.isPartialView) {
-      return "File has not been read yet. Read it first before writing to it.";
-    }
-    const lastWriteTime = Math.floor(fileStat.mtimeMs);
-    if (lastWriteTime > readTimestamp.timestamp) {
-      return "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.";
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  return null;
 }
 
 function errorResult(message: string): { content: any[]; isError: true } {

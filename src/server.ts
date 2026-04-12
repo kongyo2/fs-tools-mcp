@@ -13,8 +13,8 @@ export function createServer(): McpServer {
   });
   const state = createSessionState();
   registerFsReadTool(server, state);
-  registerFsEditTool(server, state);
-  registerFsWriteTool(server, state);
+  registerFsEditTool(server);
+  registerFsWriteTool(server);
   registerFsGlobTool(server);
   registerFsGrepTool(server);
   return server;
