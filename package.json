@@ -1,0 +1,36 @@
+{
+  "name": "@kongyo2/fs-tools-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that ports filesystem read/edit/write/glob/grep tools from the provided reference implementation.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "fs-tools-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node --eval \"import('node:fs/promises').then(fs => fs.rm('dist', { recursive: true, force: true }))\"",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "npm run build && node dist/test/run.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@vscode/ripgrep": "1.17.1",
+    "diff": "8.0.4",
+    "ignore": "7.0.5",
+    "sharp": "0.34.5",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "24.6.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}
