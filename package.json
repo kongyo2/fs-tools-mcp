@@ -31,6 +31,7 @@
     "@vscode/ripgrep": "1.17.1",
     "diff": "8.0.4",
     "ignore": "7.0.5",
+    "neverthrow": "^8.2.0",
     "sharp": "0.34.5",
     "zod": "3.25.76"
   },

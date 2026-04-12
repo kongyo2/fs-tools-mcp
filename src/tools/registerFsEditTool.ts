@@ -1,5 +1,4 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { mkdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod/v4";
 import {
@@ -14,6 +13,8 @@ import {
   writeTextContent,
 } from "../utils/file.js";
 import { readFileSyncWithMetadata } from "../utils/fileRead.js";
+import { safeStat, safeMkdir, type FsError, toFsError } from "../utils/fsResult.js";
+import { Result, ok, err } from "neverthrow";
 import { expandPath } from "../utils/path.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
 
@@ -78,9 +79,20 @@ export function registerFsEditTool(server: McpServer): void {
         }
 
         const absoluteFilePath = expandPath(file_path);
-        await mkdir(dirname(absoluteFilePath), { recursive: true });
+        const mkdirResult = await safeMkdir(dirname(absoluteFilePath));
+        if (mkdirResult.isErr()) {
+          return errorResult(
+            `Failed to create directory: ${mkdirResult.error.message}`,
+          );
+        }
 
-        const currentMeta = readFileForEdit(absoluteFilePath);
+        const currentMetaResult = readFileForEdit(absoluteFilePath);
+        if (currentMetaResult.isErr()) {
+          return errorResult(
+            `Cannot read file for editing: ${currentMetaResult.error.message}`,
+          );
+        }
+        const currentMeta = currentMetaResult.value;
 
         const actualOldString =
           findActualString(currentMeta.content, old_string) ?? old_string;
@@ -146,26 +158,19 @@ async function validateEditInput(
     return "No changes to make: old_string and new_string are exactly the same.";
   }
 
-  try {
-    const metadata = await stat(fullFilePath);
-    if (metadata.size > MAX_EDIT_FILE_SIZE) {
-      return `File is too large to edit (${metadata.size} bytes). Maximum editable file size is ${MAX_EDIT_FILE_SIZE} bytes.`;
+  const statResult = await safeStat(fullFilePath);
+  if (statResult.isOk()) {
+    if (statResult.value.size > MAX_EDIT_FILE_SIZE) {
+      return `File is too large to edit (${statResult.value.size} bytes). Maximum editable file size is ${MAX_EDIT_FILE_SIZE} bytes.`;
     }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+  } else if (statResult.error.code !== "ENOENT") {
+    return `Cannot access file: ${statResult.error.message}`;
   }
 
-  let fileContent: string | null;
-  try {
-    fileContent = readFileForEdit(fullFilePath).content;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      fileContent = null;
-    } else {
-      throw error;
-    }
+  const readResult = readFileForEdit(fullFilePath);
+  const fileContent = readResult.isOk() ? readResult.value.content : null;
+  if (readResult.isErr() && readResult.error.code !== "ENOENT") {
+    return `Cannot read file: ${readResult.error.message}`;
   }
 
   if (fileContent === null) {
@@ -206,27 +211,24 @@ async function validateEditInput(
   return null;
 }
 
-function readFileForEdit(absoluteFilePath: string): {
+type FileEditMeta = {
   content: string;
   encoding: BufferEncoding;
   lineEndings: "CRLF" | "LF";
-} {
+};
+
+function readFileForEdit(
+  absoluteFilePath: string,
+): Result<FileEditMeta, FsError> {
   try {
     const meta = readFileSyncWithMetadata(absoluteFilePath);
-    return {
+    return ok({
       content: meta.content,
       encoding: meta.encoding,
       lineEndings: meta.lineEndings,
-    };
+    });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {
-        content: "",
-        encoding: "utf8",
-        lineEndings: "LF",
-      };
-    }
-    throw error;
+    return err(toFsError(error));
   }
 }
 

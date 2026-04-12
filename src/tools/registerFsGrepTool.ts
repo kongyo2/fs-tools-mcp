@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { stat } from "node:fs/promises";
 import { z } from "zod/v4";
 import { FILE_NOT_FOUND_CWD_NOTE, suggestPathUnderCwd } from "../utils/file.js";
+import { safeStat } from "../utils/fsResult.js";
 import { expandPath, toRelativePath } from "../utils/path.js";
 import { ripGrep } from "../utils/ripgrep.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
@@ -106,10 +107,9 @@ Usage:
       try {
         if (input.path) {
           const absolutePath = expandPath(input.path);
-          try {
-            await stat(absolutePath);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          const statResult = await safeStat(absolutePath);
+          if (statResult.isErr()) {
+            if (statResult.error.code === "ENOENT") {
               const cwdSuggestion = await suggestPathUnderCwd(absolutePath);
               let message = `Path does not exist: ${input.path}. ${FILE_NOT_FOUND_CWD_NOTE} ${process.cwd()}.`;
               if (cwdSuggestion) {
@@ -117,7 +117,9 @@ Usage:
               }
               return errorResult(message);
             }
-            throw error;
+            return errorResult(
+              `Cannot access path: ${statResult.error.message}`,
+            );
           }
         }
 

@@ -15,6 +15,8 @@ import {
   getFileModificationTimeAsync,
   suggestPathUnderCwd,
 } from "../utils/file.js";
+import { safeStat } from "../utils/fsResult.js";
+import { isENOENT } from "../utils/errors.js";
 import { formatFileSize } from "../utils/format.js";
 import { readNotebook } from "../utils/notebook.js";
 import { extractPDFPages, getPDFPageCount, readPDF } from "../utils/pdf.js";
@@ -195,8 +197,9 @@ Usage:
           existingState.offset === offset &&
           existingState.limit === limit
         ) {
-          try {
-            const mtimeMs = await getFileModificationTimeAsync(fullFilePath);
+          const mtimeResult = await safeStat(fullFilePath);
+          if (mtimeResult.isOk()) {
+            const mtimeMs = Math.floor(mtimeResult.value.mtimeMs);
             if (mtimeMs === existingState.timestamp) {
               const data: ReadOutput = {
                 type: "file_unchanged",
@@ -209,9 +212,8 @@ Usage:
                 structuredContent: data,
               };
             }
-          } catch {
-            // Fall through to full read.
           }
+          // On stat failure (e.g. file deleted), fall through to full read.
         }
 
         const data = await callReadTool(
@@ -224,10 +226,7 @@ Usage:
         );
         return await mapReadOutput(data);
       } catch (error) {
-        if (
-          error instanceof Error &&
-          (error as NodeJS.ErrnoException).code === "ENOENT"
-        ) {
+        if (isENOENT(error)) {
           const fullFilePath = expandPath(file_path);
           const alternatePath = getAlternateScreenshotPath(fullFilePath);
           if (alternatePath) {
@@ -242,8 +241,14 @@ Usage:
                 fullFilePath,
               );
               return await mapReadOutput(data);
-            } catch {
-              // Fall through.
+            } catch (retryError) {
+              if (!isENOENT(retryError)) {
+                return errorResult(
+                  retryError instanceof Error
+                    ? retryError.message
+                    : String(retryError),
+                );
+              }
             }
           }
           const cwdSuggestion = await suggestPathUnderCwd(fullFilePath);
@@ -337,7 +342,9 @@ async function callReadTool(
         parsedRange ?? undefined,
       );
       if (!extracted.success) {
-        throw new Error(extracted.error.message);
+        throw new Error(
+          `PDF extraction failed (${extracted.error.reason}): ${extracted.error.message}`,
+        );
       }
       return extracted.data;
     }
@@ -349,7 +356,9 @@ async function callReadTool(
     }
     const pdf = await readPDF(resolvedPath);
     if (!pdf.success) {
-      throw new Error(pdf.error.message);
+      throw new Error(
+        `PDF read failed (${pdf.error.reason}): ${pdf.error.message}`,
+      );
     }
     return pdf.data;
   }

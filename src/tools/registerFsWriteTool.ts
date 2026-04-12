@@ -1,10 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod/v4";
 import { getPatchForDisplay } from "../utils/diff.js";
 import { writeTextContent } from "../utils/file.js";
 import { readFileSyncWithMetadata } from "../utils/fileRead.js";
+import { safeMkdir, toFsError } from "../utils/fsResult.js";
 import { expandPath } from "../utils/path.js";
 
 const FILE_WRITE_TOOL_NAME = "fs_write";
@@ -54,16 +54,22 @@ Usage:
     async ({ file_path, content }) => {
       try {
         const fullFilePath = expandPath(file_path);
-        await mkdir(dirname(fullFilePath), { recursive: true });
+        const mkdirResult = await safeMkdir(dirname(fullFilePath));
+        if (mkdirResult.isErr()) {
+          return errorResult(
+            `Failed to create directory: ${mkdirResult.error.message}`,
+          );
+        }
 
         let meta: ReturnType<typeof readFileSyncWithMetadata> | null;
         try {
           meta = readFileSyncWithMetadata(fullFilePath);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          const fsErr = toFsError(error);
+          if (fsErr.code === "ENOENT") {
             meta = null;
           } else {
-            throw error;
+            return errorResult(`Cannot read existing file: ${fsErr.message}`);
           }
         }
 
