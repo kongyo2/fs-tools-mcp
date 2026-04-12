@@ -10,25 +10,65 @@ import { formatRipgrepCountSummary } from "../utils/ripgrep.js";
 import { plural } from "../utils/string.js";
 
 const GREP_TOOL_NAME = "fs_grep";
-const VCS_DIRECTORIES_TO_EXCLUDE = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const;
+const VCS_DIRECTORIES_TO_EXCLUDE = [
+  ".git",
+  ".svn",
+  ".hg",
+  ".bzr",
+  ".jj",
+  ".sl",
+] as const;
 const DEFAULT_HEAD_LIMIT = 250;
 
-const inputSchema = z.object({
-  pattern: z.string().describe("The regular expression pattern to search for in file contents"),
-  path: z.string().optional().describe("File or directory to search in. Defaults to current working directory."),
-  glob: z.string().optional().describe("Glob pattern to filter files (e.g. *.js, *.{ts,tsx})."),
-  output_mode: z.enum(["content", "files_with_matches", "count"]).optional().describe("Output mode. Defaults to files_with_matches."),
-  "-B": semanticNumber(z.number().optional()).describe("Number of lines to show before each match."),
-  "-A": semanticNumber(z.number().optional()).describe("Number of lines to show after each match."),
-  "-C": semanticNumber(z.number().optional()).describe("Alias for context."),
-  context: semanticNumber(z.number().optional()).describe("Number of lines to show before and after each match."),
-  "-n": semanticBoolean(z.boolean().optional()).describe("Show line numbers in output. Defaults to true for content mode."),
-  "-i": semanticBoolean(z.boolean().optional()).describe("Case insensitive search."),
-  type: z.string().optional().describe("File type to search (rg --type)."),
-  head_limit: semanticNumber(z.number().optional()).describe("Limit output to first N lines/entries. Defaults to 250 when unspecified. Pass 0 for unlimited."),
-  offset: semanticNumber(z.number().optional()).describe("Skip first N lines/entries before applying head_limit."),
-  multiline: semanticBoolean(z.boolean().optional()).describe("Enable multiline mode.")
-}).strict();
+const inputSchema = z
+  .object({
+    pattern: z
+      .string()
+      .describe(
+        "The regular expression pattern to search for in file contents",
+      ),
+    path: z
+      .string()
+      .optional()
+      .describe(
+        "File or directory to search in. Defaults to current working directory.",
+      ),
+    glob: z
+      .string()
+      .optional()
+      .describe("Glob pattern to filter files (e.g. *.js, *.{ts,tsx})."),
+    output_mode: z
+      .enum(["content", "files_with_matches", "count"])
+      .optional()
+      .describe("Output mode. Defaults to files_with_matches."),
+    "-B": semanticNumber(z.number().optional()).describe(
+      "Number of lines to show before each match.",
+    ),
+    "-A": semanticNumber(z.number().optional()).describe(
+      "Number of lines to show after each match.",
+    ),
+    "-C": semanticNumber(z.number().optional()).describe("Alias for context."),
+    context: semanticNumber(z.number().optional()).describe(
+      "Number of lines to show before and after each match.",
+    ),
+    "-n": semanticBoolean(z.boolean().optional()).describe(
+      "Show line numbers in output. Defaults to true for content mode.",
+    ),
+    "-i": semanticBoolean(z.boolean().optional()).describe(
+      "Case insensitive search.",
+    ),
+    type: z.string().optional().describe("File type to search (rg --type)."),
+    head_limit: semanticNumber(z.number().optional()).describe(
+      "Limit output to first N lines/entries. Defaults to 250 when unspecified. Pass 0 for unlimited.",
+    ),
+    offset: semanticNumber(z.number().optional()).describe(
+      "Skip first N lines/entries before applying head_limit.",
+    ),
+    multiline: semanticBoolean(z.boolean().optional()).describe(
+      "Enable multiline mode.",
+    ),
+  })
+  .strict();
 
 const outputSchema = z.object({
   mode: z.enum(["content", "files_with_matches", "count"]).optional(),
@@ -38,7 +78,7 @@ const outputSchema = z.object({
   numLines: z.number().optional(),
   numMatches: z.number().optional(),
   appliedLimit: z.number().optional(),
-  appliedOffset: z.number().optional()
+  appliedOffset: z.number().optional(),
 });
 
 export function registerFsGrepTool(server: McpServer): void {
@@ -59,8 +99,8 @@ Usage:
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false
-      }
+        openWorldHint: false,
+      },
     },
     async (input) => {
       try {
@@ -84,16 +124,20 @@ Usage:
         const output = await runGrep(input);
         return {
           content: [{ type: "text", text: renderGrepText(output) }],
-          structuredContent: output
+          structuredContent: output,
         };
       } catch (error) {
-        return errorResult(error instanceof Error ? error.message : String(error));
+        return errorResult(
+          error instanceof Error ? error.message : String(error),
+        );
       }
-    }
+    },
   );
 }
 
-async function runGrep(input: z.infer<typeof inputSchema>): Promise<z.infer<typeof outputSchema>> {
+async function runGrep(
+  input: z.infer<typeof inputSchema>,
+): Promise<z.infer<typeof outputSchema>> {
   const {
     pattern,
     path,
@@ -108,7 +152,7 @@ async function runGrep(input: z.infer<typeof inputSchema>): Promise<z.infer<type
     "-i": caseInsensitive = false,
     head_limit,
     offset = 0,
-    multiline = false
+    multiline = false,
   } = input;
 
   const absolutePath = path ? expandPath(path) : process.cwd();
@@ -159,14 +203,21 @@ async function runGrep(input: z.infer<typeof inputSchema>): Promise<z.infer<type
       if (!rawPattern) {
         continue;
       }
-      const patterns = rawPattern.includes("{") && rawPattern.includes("}") ? [rawPattern] : rawPattern.split(",").filter(Boolean);
+      const patterns =
+        rawPattern.includes("{") && rawPattern.includes("}")
+          ? [rawPattern]
+          : rawPattern.split(",").filter(Boolean);
       for (const globPattern of patterns) {
         args.push("--glob", globPattern);
       }
     }
   }
 
-  const results = await ripGrep(args, absolutePath, AbortSignal.timeout(60_000));
+  const results = await ripGrep(
+    args,
+    absolutePath,
+    AbortSignal.timeout(60_000),
+  );
 
   if (output_mode === "content") {
     const limited = applyHeadLimit(results, head_limit, offset);
@@ -184,8 +235,10 @@ async function runGrep(input: z.infer<typeof inputSchema>): Promise<z.infer<type
       filenames: [],
       content: finalLines.join("\n"),
       numLines: finalLines.length,
-      ...(limited.appliedLimit !== undefined ? { appliedLimit: limited.appliedLimit } : {}),
-      ...(offset > 0 ? { appliedOffset: offset } : {})
+      ...(limited.appliedLimit !== undefined
+        ? { appliedLimit: limited.appliedLimit }
+        : {}),
+      ...(offset > 0 ? { appliedOffset: offset } : {}),
     };
   }
 
@@ -216,17 +269,31 @@ async function runGrep(input: z.infer<typeof inputSchema>): Promise<z.infer<type
       filenames: [],
       content: finalCountLines.join("\n"),
       numMatches: totalMatches,
-      ...(limited.appliedLimit !== undefined ? { appliedLimit: limited.appliedLimit } : {}),
-      ...(offset > 0 ? { appliedOffset: offset } : {})
+      ...(limited.appliedLimit !== undefined
+        ? { appliedLimit: limited.appliedLimit }
+        : {}),
+      ...(offset > 0 ? { appliedOffset: offset } : {}),
     };
   }
 
-  const stats = await Promise.allSettled(results.map(async (file) => await stat(file)));
+  const stats = await Promise.allSettled(
+    results.map(async (file) => await stat(file)),
+  );
   const sortedMatches = results
-    .map((file, index) => [file, stats[index]?.status === "fulfilled" ? stats[index].value.mtimeMs ?? 0 : 0] as const)
+    .map(
+      (file, index) =>
+        [
+          file,
+          stats[index]?.status === "fulfilled"
+            ? (stats[index].value.mtimeMs ?? 0)
+            : 0,
+        ] as const,
+    )
     .sort((left, right) => {
       const timeComparison = right[1] - left[1];
-      return timeComparison === 0 ? left[0].localeCompare(right[0]) : timeComparison;
+      return timeComparison === 0
+        ? left[0].localeCompare(right[0])
+        : timeComparison;
     })
     .map(([file]) => file);
   const limited = applyHeadLimit(sortedMatches, head_limit, offset);
@@ -235,12 +302,18 @@ async function runGrep(input: z.infer<typeof inputSchema>): Promise<z.infer<type
     mode: "files_with_matches",
     filenames: relativeMatches,
     numFiles: relativeMatches.length,
-    ...(limited.appliedLimit !== undefined ? { appliedLimit: limited.appliedLimit } : {}),
-    ...(offset > 0 ? { appliedOffset: offset } : {})
+    ...(limited.appliedLimit !== undefined
+      ? { appliedLimit: limited.appliedLimit }
+      : {}),
+    ...(offset > 0 ? { appliedOffset: offset } : {}),
   };
 }
 
-function applyHeadLimit<T>(items: T[], limit: number | undefined, offset = 0): { items: T[]; appliedLimit: number | undefined } {
+function applyHeadLimit<T>(
+  items: T[],
+  limit: number | undefined,
+  offset = 0,
+): { items: T[]; appliedLimit: number | undefined } {
   if (limit === 0) {
     return { items: items.slice(offset), appliedLimit: undefined };
   }
@@ -249,11 +322,14 @@ function applyHeadLimit<T>(items: T[], limit: number | undefined, offset = 0): {
   const wasTruncated = items.length - offset > effectiveLimit;
   return {
     items: sliced,
-    appliedLimit: wasTruncated ? effectiveLimit : undefined
+    appliedLimit: wasTruncated ? effectiveLimit : undefined,
   };
 }
 
-function formatLimitInfo(appliedLimit: number | undefined, appliedOffset: number | undefined): string {
+function formatLimitInfo(
+  appliedLimit: number | undefined,
+  appliedOffset: number | undefined,
+): string {
   const parts: string[] = [];
   if (appliedLimit !== undefined) {
     parts.push(`limit: ${appliedLimit}`);
@@ -268,12 +344,20 @@ function renderGrepText(output: z.infer<typeof outputSchema>): string {
   const mode = output.mode ?? "files_with_matches";
   if (mode === "content") {
     const result = output.content || "No matches found";
-    const limitInfo = formatLimitInfo(output.appliedLimit, output.appliedOffset);
-    return limitInfo ? `${result}\n\n[Showing results with pagination = ${limitInfo}]` : result;
+    const limitInfo = formatLimitInfo(
+      output.appliedLimit,
+      output.appliedOffset,
+    );
+    return limitInfo
+      ? `${result}\n\n[Showing results with pagination = ${limitInfo}]`
+      : result;
   }
   if (mode === "count") {
     const rawContent = output.content || "No matches found";
-    const limitInfo = formatLimitInfo(output.appliedLimit, output.appliedOffset);
+    const limitInfo = formatLimitInfo(
+      output.appliedLimit,
+      output.appliedOffset,
+    );
     return `${rawContent}\n\n${formatRipgrepCountSummary(output.numMatches ?? 0, output.numFiles ?? 0)}${limitInfo ? ` with pagination = ${limitInfo}` : ""}`;
   }
   const limitInfo = formatLimitInfo(output.appliedLimit, output.appliedOffset);
@@ -286,6 +370,6 @@ function renderGrepText(output: z.infer<typeof outputSchema>): string {
 function errorResult(message: string): { content: any[]; isError: true } {
   return {
     content: [{ type: "text", text: message }],
-    isError: true
+    isError: true,
   };
 }

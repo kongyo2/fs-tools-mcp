@@ -1,5 +1,12 @@
 import { homedir } from "node:os";
-import { dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  normalize,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 
 export function getCwd(): string {
   return process.cwd();
@@ -24,7 +31,9 @@ export function expandPath(inputPath: string, baseDir = getCwd()): string {
   }
   if (process.platform === "win32" && /^\/[a-z]\//i.test(trimmedPath)) {
     const drive = trimmedPath[1]?.toUpperCase();
-    return normalize(`${drive}:${trimmedPath.slice(2).replaceAll("/", sep)}`).normalize("NFC");
+    return normalize(
+      `${drive}:${trimmedPath.slice(2).replaceAll("/", sep)}`,
+    ).normalize("NFC");
   }
   if (isAbsolute(trimmedPath)) {
     return normalize(trimmedPath).normalize("NFC");

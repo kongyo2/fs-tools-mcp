@@ -5,15 +5,25 @@ import { plural } from "./string.js";
 const MAX_BUFFER_SIZE = 20_000_000;
 
 export class RipgrepTimeoutError extends Error {
-  constructor(message: string, public readonly partialResults: string[]) {
+  constructor(
+    message: string,
+    public readonly partialResults: string[],
+  ) {
     super(message);
     this.name = "RipgrepTimeoutError";
   }
 }
 
 function ripgrepTimeoutMs(): number {
-  const configured = Number.parseInt(process.env.FS_TOOLS_MCP_GLOB_TIMEOUT_SECONDS ?? "", 10);
-  return Number.isFinite(configured) && configured > 0 ? configured * 1000 : process.platform === "linux" && process.env.WSL_DISTRO_NAME ? 60_000 : 20_000;
+  const configured = Number.parseInt(
+    process.env.FS_TOOLS_MCP_GLOB_TIMEOUT_SECONDS ?? "",
+    10,
+  );
+  return Number.isFinite(configured) && configured > 0
+    ? configured * 1000
+    : process.platform === "linux" && process.env.WSL_DISTRO_NAME
+      ? 60_000
+      : 20_000;
 }
 
 function normalizeLines(stdout: string): string[] {
@@ -28,8 +38,12 @@ function ripGrepRaw(
   args: string[],
   target: string,
   abortSignal: AbortSignal,
-  callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
-  singleThread = false
+  callback: (
+    error: ExecFileException | null,
+    stdout: string,
+    stderr: string,
+  ) => void,
+  singleThread = false,
 ): void {
   const fullArgs = [...(singleThread ? ["-j", "1"] : []), ...args, target];
   execFile(
@@ -41,19 +55,31 @@ function ripGrepRaw(
       killSignal: process.platform === "win32" ? undefined : "SIGKILL",
       signal: abortSignal,
       windowsHide: true,
-      maxBuffer: MAX_BUFFER_SIZE
+      maxBuffer: MAX_BUFFER_SIZE,
     },
-    callback
+    callback,
   );
 }
 
 function isEagainError(stderr: string): boolean {
-  return stderr.includes("os error 11") || stderr.includes("Resource temporarily unavailable");
+  return (
+    stderr.includes("os error 11") ||
+    stderr.includes("Resource temporarily unavailable")
+  );
 }
 
-export async function ripGrep(args: string[], target: string, abortSignal: AbortSignal): Promise<string[]> {
+export async function ripGrep(
+  args: string[],
+  target: string,
+  abortSignal: AbortSignal,
+): Promise<string[]> {
   return await new Promise((resolve, reject) => {
-    const handleResult = (error: ExecFileException | null, stdout: string, stderr: string, retried: boolean): void => {
+    const handleResult = (
+      error: ExecFileException | null,
+      stdout: string,
+      stderr: string,
+      retried: boolean,
+    ): void => {
       if (!error) {
         resolve(normalizeLines(stdout));
         return;
@@ -63,15 +89,29 @@ export async function ripGrep(args: string[], target: string, abortSignal: Abort
         return;
       }
       if (!retried && isEagainError(stderr)) {
-        ripGrepRaw(args, target, abortSignal, (retryError, retryStdout, retryStderr) => {
-          handleResult(retryError, retryStdout, retryStderr, true);
-        }, true);
+        ripGrepRaw(
+          args,
+          target,
+          abortSignal,
+          (retryError, retryStdout, retryStderr) => {
+            handleResult(retryError, retryStdout, retryStderr, true);
+          },
+          true,
+        );
         return;
       }
       const partialResults = stdout.trim() ? normalizeLines(stdout) : [];
-      const isTimeout = error.signal === "SIGTERM" || error.signal === "SIGKILL" || error.code === "ABORT_ERR";
+      const isTimeout =
+        error.signal === "SIGTERM" ||
+        error.signal === "SIGKILL" ||
+        error.code === "ABORT_ERR";
       if (isTimeout && partialResults.length === 0) {
-        reject(new RipgrepTimeoutError(`Ripgrep search timed out after ${Math.floor(ripgrepTimeoutMs() / 1000)} seconds. Try searching a more specific path or pattern.`, partialResults));
+        reject(
+          new RipgrepTimeoutError(
+            `Ripgrep search timed out after ${Math.floor(ripgrepTimeoutMs() / 1000)} seconds. Try searching a more specific path or pattern.`,
+            partialResults,
+          ),
+        );
         return;
       }
       resolve(partialResults);
@@ -87,13 +127,13 @@ export async function ripGrepStream(
   args: string[],
   target: string,
   abortSignal: AbortSignal,
-  onLines: (lines: string[]) => void
+  onLines: (lines: string[]) => void,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(rgPath, [...args, target], {
       signal: abortSignal,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"]
+      stdio: ["ignore", "pipe", "ignore"],
     });
     let remainder = "";
     let settled = false;
@@ -132,6 +172,9 @@ export async function ripGrepStream(
   });
 }
 
-export function formatRipgrepCountSummary(matches: number, files: number): string {
+export function formatRipgrepCountSummary(
+  matches: number,
+  files: number,
+): string {
   return `Found ${matches} total ${plural(matches, "occurrence")} across ${files} ${plural(files, "file")}.`;
 }

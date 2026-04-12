@@ -12,6 +12,6 @@ export type SessionState = {
 
 export function createSessionState(): SessionState {
   return {
-    readFileState: new Map<string, ReadFileStateEntry>()
+    readFileState: new Map<string, ReadFileStateEntry>(),
   };
 }

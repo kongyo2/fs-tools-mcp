@@ -7,16 +7,23 @@ import { expandPath, toRelativePath } from "../utils/path.js";
 
 const GLOB_TOOL_NAME = "fs_glob";
 
-const inputSchema = z.object({
-  pattern: z.string().describe("The glob pattern to match files against"),
-  path: z.string().optional().describe("The directory to search in. If not specified, the current working directory will be used.")
-}).strict();
+const inputSchema = z
+  .object({
+    pattern: z.string().describe("The glob pattern to match files against"),
+    path: z
+      .string()
+      .optional()
+      .describe(
+        "The directory to search in. If not specified, the current working directory will be used.",
+      ),
+  })
+  .strict();
 
 const outputSchema = z.object({
   durationMs: z.number(),
   numFiles: z.number(),
   filenames: z.array(z.string()),
-  truncated: z.boolean()
+  truncated: z.boolean(),
 });
 
 export function registerFsGlobTool(server: McpServer): void {
@@ -36,8 +43,8 @@ Usage:
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false
-      }
+        openWorldHint: false,
+      },
     },
     async ({ pattern, path }) => {
       try {
@@ -63,33 +70,50 @@ Usage:
         }
 
         const start = Date.now();
-        const result = await glob(pattern, path ? expandPath(path) : process.cwd(), { limit: 100, offset: 0 }, AbortSignal.timeout(60_000));
+        const result = await glob(
+          pattern,
+          path ? expandPath(path) : process.cwd(),
+          { limit: 100, offset: 0 },
+          AbortSignal.timeout(60_000),
+        );
         const filenames = result.files.map(toRelativePath);
         const output = {
           filenames,
           durationMs: Date.now() - start,
           numFiles: filenames.length,
-          truncated: result.truncated
+          truncated: result.truncated,
         };
         return {
           content: [
             {
               type: "text",
-              text: filenames.length === 0 ? "No files found" : [...filenames, ...(result.truncated ? ["(Results are truncated. Consider using a more specific path or pattern.)"] : [])].join("\n")
-            }
+              text:
+                filenames.length === 0
+                  ? "No files found"
+                  : [
+                      ...filenames,
+                      ...(result.truncated
+                        ? [
+                            "(Results are truncated. Consider using a more specific path or pattern.)",
+                          ]
+                        : []),
+                    ].join("\n"),
+            },
           ],
-          structuredContent: output
+          structuredContent: output,
         };
       } catch (error) {
-        return errorResult(error instanceof Error ? error.message : String(error));
+        return errorResult(
+          error instanceof Error ? error.message : String(error),
+        );
       }
-    }
+    },
   );
 }
 
 function errorResult(message: string): { content: any[]; isError: true } {
   return {
     content: [{ type: "text", text: message }],
-    isError: true
+    isError: true,
   };
 }

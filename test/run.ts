@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyEditToFile, getPatchForEdit, preserveQuoteStyle } from "../src/tools/fsEditUtils.js";
+import {
+  applyEditToFile,
+  getPatchForEdit,
+  preserveQuoteStyle,
+} from "../src/tools/fsEditUtils.js";
 import { glob } from "../src/utils/glob.js";
 import { parsePDFPageRange } from "../src/utils/pdfUtils.js";
 import { readFileInRange } from "../src/utils/readFileInRange.js";
@@ -11,7 +15,10 @@ import { extractGlobBaseDirectory } from "../src/utils/glob.js";
 
 let passed = 0;
 
-async function run(name: string, fn: () => void | Promise<void>): Promise<void> {
+async function run(
+  name: string,
+  fn: () => void | Promise<void>,
+): Promise<void> {
   try {
     await fn();
     passed += 1;
@@ -22,14 +29,21 @@ async function run(name: string, fn: () => void | Promise<void>): Promise<void> 
   }
 }
 
-await run("applyEditToFile removes a trailing newline when deleting a line", () => {
-  const original = "alpha\nbeta\n";
-  const updated = applyEditToFile(original, "beta", "", false);
-  assert.equal(updated, "alpha\n");
-});
+await run(
+  "applyEditToFile removes a trailing newline when deleting a line",
+  () => {
+    const original = "alpha\nbeta\n";
+    const updated = applyEditToFile(original, "beta", "", false);
+    assert.equal(updated, "alpha\n");
+  },
+);
 
 await run("preserveQuoteStyle converts straight quotes to curly quotes", () => {
-  const updated = preserveQuoteStyle("\"hello\"", "\u201chello\u201d", "\"goodbye\"");
+  const updated = preserveQuoteStyle(
+    '"hello"',
+    "\u201chello\u201d",
+    '"goodbye"',
+  );
   assert.equal(updated, "\u201cgoodbye\u201d");
 });
 
@@ -38,7 +52,7 @@ await run("getPatchForEdit returns an updated file and diff hunks", () => {
     filePath: "sample.txt",
     fileContents: "one\ntwo\nthree\n",
     oldString: "two",
-    newString: "TWO"
+    newString: "TWO",
   });
   assert.equal(result.updatedFile, "one\nTWO\nthree\n");
   assert.equal(result.patch.length, 1);
@@ -65,7 +79,9 @@ await run("readFileInRange truncates by bytes when requested", async () => {
   try {
     const file = join(dir, "sample.txt");
     await writeFile(file, "alpha\nbeta\ngamma\n", "utf8");
-    const result = await readFileInRange(file, 0, undefined, 9, undefined, { truncateOnByteLimit: true });
+    const result = await readFileInRange(file, 0, undefined, 9, undefined, {
+      truncateOnByteLimit: true,
+    });
     assert.equal(result.content, "alpha");
     assert.equal(result.truncatedByBytes, true);
   } finally {
@@ -79,7 +95,12 @@ await run("glob finds files under a temporary tree", async () => {
     await mkdir(join(dir, "src"), { recursive: true });
     await writeFile(join(dir, "src", "a.ts"), "export const a = 1;\n", "utf8");
     await writeFile(join(dir, "src", "b.ts"), "export const b = 2;\n", "utf8");
-    const result = await glob("**/*.ts", dir, { limit: 100, offset: 0 }, AbortSignal.timeout(10_000));
+    const result = await glob(
+      "**/*.ts",
+      dir,
+      { limit: 100, offset: 0 },
+      AbortSignal.timeout(10_000),
+    );
     assert.equal(result.files.length, 2);
     assert.equal(result.truncated, false);
   } finally {
@@ -92,7 +113,11 @@ await run("ripGrep returns matching files", async () => {
   try {
     await writeFile(join(dir, "one.txt"), "needle here\n", "utf8");
     await writeFile(join(dir, "two.txt"), "nothing here\n", "utf8");
-    const results = await ripGrep(["-l", "needle"], dir, AbortSignal.timeout(10_000));
+    const results = await ripGrep(
+      ["-l", "needle"],
+      dir,
+      AbortSignal.timeout(10_000),
+    );
     assert.equal(results.length, 1);
     assert.ok(results[0]?.endsWith("one.txt"));
   } finally {
@@ -102,7 +127,10 @@ await run("ripGrep returns matching files", async () => {
 
 await run("parsePDFPageRange parses single page and open ended ranges", () => {
   assert.deepEqual(parsePDFPageRange("3"), { firstPage: 3, lastPage: 3 });
-  assert.deepEqual(parsePDFPageRange("5-"), { firstPage: 5, lastPage: Number.POSITIVE_INFINITY });
+  assert.deepEqual(parsePDFPageRange("5-"), {
+    firstPage: 5,
+    lastPage: Number.POSITIVE_INFINITY,
+  });
   assert.deepEqual(parsePDFPageRange("2-4"), { firstPage: 2, lastPage: 4 });
   assert.equal(parsePDFPageRange("0"), null);
 });

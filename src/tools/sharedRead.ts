@@ -1,5 +1,11 @@
 import { readFileBytes } from "../utils/fsOperations.js";
-import { assertImageFitsApi, compressImageBufferWithTokenLimit, detectImageFormatFromBuffer, maybeResizeAndDownsampleImageBuffer, type ImageDimensions } from "../utils/image.js";
+import {
+  assertImageFitsApi,
+  compressImageBufferWithTokenLimit,
+  detectImageFormatFromBuffer,
+  maybeResizeAndDownsampleImageBuffer,
+  type ImageDimensions,
+} from "../utils/image.js";
 
 type ImageResult = {
   type: "image";
@@ -11,7 +17,12 @@ type ImageResult = {
   };
 };
 
-function createImageResponse(buffer: Buffer, mediaType: string, originalSize: number, dimensions?: ImageDimensions): ImageResult {
+function createImageResponse(
+  buffer: Buffer,
+  mediaType: string,
+  originalSize: number,
+  dimensions?: ImageDimensions,
+): ImageResult {
   const type = `image/${mediaType}` as ImageResult["file"]["type"];
   const base64 = buffer.toString("base64");
   assertImageFitsApi(base64);
@@ -21,12 +32,15 @@ function createImageResponse(buffer: Buffer, mediaType: string, originalSize: nu
       base64,
       type,
       originalSize,
-      dimensions
-    }
+      dimensions,
+    },
   };
 }
 
-export async function readImageWithTokenBudget(filePath: string, maxTokens: number): Promise<ImageResult> {
+export async function readImageWithTokenBudget(
+  filePath: string,
+  maxTokens: number,
+): Promise<ImageResult> {
   const imageBuffer = await readFileBytes(filePath);
   const originalSize = imageBuffer.length;
   if (originalSize === 0) {
@@ -38,8 +52,17 @@ export async function readImageWithTokenBudget(filePath: string, maxTokens: numb
 
   let result: ImageResult;
   try {
-    const resized = await maybeResizeAndDownsampleImageBuffer(imageBuffer, originalSize, detectedFormat);
-    result = createImageResponse(resized.buffer, resized.mediaType, originalSize, resized.dimensions);
+    const resized = await maybeResizeAndDownsampleImageBuffer(
+      imageBuffer,
+      originalSize,
+      detectedFormat,
+    );
+    result = createImageResponse(
+      resized.buffer,
+      resized.mediaType,
+      originalSize,
+      resized.dimensions,
+    );
   } catch (error) {
     if (error instanceof Error && error.name === "ImageResizeError") {
       throw error;
@@ -49,14 +72,18 @@ export async function readImageWithTokenBudget(filePath: string, maxTokens: numb
 
   const estimatedTokens = Math.ceil(result.file.base64.length * 0.125);
   if (estimatedTokens > maxTokens) {
-    const compressed = await compressImageBufferWithTokenLimit(imageBuffer, maxTokens, detectedMediaType);
+    const compressed = await compressImageBufferWithTokenLimit(
+      imageBuffer,
+      maxTokens,
+      detectedMediaType,
+    );
     return {
       type: "image",
       file: {
         base64: compressed.base64,
         type: compressed.mediaType,
-        originalSize
-      }
+        originalSize,
+      },
     };
   }
 
