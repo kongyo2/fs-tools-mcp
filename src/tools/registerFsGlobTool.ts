@@ -4,8 +4,10 @@ import { glob } from "../utils/glob.js";
 import { FILE_NOT_FOUND_CWD_NOTE, suggestPathUnderCwd } from "../utils/file.js";
 import { safeStat } from "../utils/fsResult.js";
 import { expandPath, toRelativePath } from "../utils/path.js";
+import { semanticNumber } from "../utils/semanticNumber.js";
 
 const GLOB_TOOL_NAME = "fs_glob";
+const DEFAULT_LIMIT = 1000;
 
 const inputSchema = z
   .object({
@@ -16,6 +18,12 @@ const inputSchema = z
       .describe(
         "The directory to search in. If not specified, the current working directory will be used.",
       ),
+    limit: semanticNumber(z.number().int().positive().optional()).describe(
+      `Maximum number of files to return (default ${DEFAULT_LIMIT}).`,
+    ),
+    offset: semanticNumber(z.number().int().nonnegative().optional()).describe(
+      "Skip first N matches before applying limit (default 0).",
+    ),
   })
   .strict();
 
@@ -24,6 +32,8 @@ const outputSchema = z.object({
   numFiles: z.number(),
   filenames: z.array(z.string()),
   truncated: z.boolean(),
+  appliedLimit: z.number().optional(),
+  appliedOffset: z.number().optional(),
 });
 
 export function registerFsGlobTool(server: McpServer): void {
@@ -31,7 +41,7 @@ export function registerFsGlobTool(server: McpServer): void {
     GLOB_TOOL_NAME,
     {
       title: "Glob Files",
-      description: `Fast file pattern matching tool.
+      description: `Fast file pattern matching tool that works with any codebase size.
 
 Usage:
 - Supports glob patterns like "**/*.js" or "src/**/*.ts".
@@ -46,8 +56,10 @@ Usage:
         openWorldHint: false,
       },
     },
-    async ({ pattern, path }) => {
+    async ({ pattern, path, limit, offset }) => {
       try {
+        const effectiveLimit = limit ?? DEFAULT_LIMIT;
+        const effectiveOffset = offset ?? 0;
         if (path) {
           const absolutePath = expandPath(path);
           const statResult = await safeStat(absolutePath);
@@ -73,7 +85,7 @@ Usage:
         const result = await glob(
           pattern,
           path ? expandPath(path) : process.cwd(),
-          { limit: 100, offset: 0 },
+          { limit: effectiveLimit, offset: effectiveOffset },
           AbortSignal.timeout(60_000),
         );
         const filenames = result.files.map(toRelativePath);
@@ -82,6 +94,10 @@ Usage:
           durationMs: Date.now() - start,
           numFiles: filenames.length,
           truncated: result.truncated,
+          ...(effectiveLimit !== DEFAULT_LIMIT
+            ? { appliedLimit: effectiveLimit }
+            : {}),
+          ...(effectiveOffset > 0 ? { appliedOffset: effectiveOffset } : {}),
         };
         return {
           content: [
@@ -94,7 +110,7 @@ Usage:
                       ...filenames,
                       ...(result.truncated
                         ? [
-                            "(Results are truncated. Consider using a more specific path or pattern.)",
+                            "(Results are truncated. Use offset/limit to paginate or use a more specific pattern.)",
                           ]
                         : []),
                     ].join("\n"),

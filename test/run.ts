@@ -1,17 +1,26 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applyEditToFile,
   getPatchForEdit,
+  getPatchForEdits,
   preserveQuoteStyle,
 } from "../src/tools/fsEditUtils.js";
+import {
+  decodeBuffer,
+  detectEncodingFromBuffer,
+  encodeForWrite,
+} from "../src/utils/encoding.js";
 import { glob } from "../src/utils/glob.js";
+import { parseCellId } from "../src/utils/notebook.js";
 import { parsePDFPageRange } from "../src/utils/pdfUtils.js";
 import { readFileInRange } from "../src/utils/readFileInRange.js";
-import { ripGrep } from "../src/utils/ripgrep.js";
 import { extractGlobBaseDirectory } from "../src/utils/glob.js";
+import { readFileSyncWithMetadata } from "../src/utils/fileRead.js";
+import { ripGrep } from "../src/utils/ripgrep.js";
+import { findSimilarFile } from "../src/utils/file.js";
 
 let passed = 0;
 
@@ -39,12 +48,8 @@ await run(
 );
 
 await run("preserveQuoteStyle converts straight quotes to curly quotes", () => {
-  const updated = preserveQuoteStyle(
-    '"hello"',
-    "\u201chello\u201d",
-    '"goodbye"',
-  );
-  assert.equal(updated, "\u201cgoodbye\u201d");
+  const updated = preserveQuoteStyle('"hello"', "“hello”", '"goodbye"');
+  assert.equal(updated, "“goodbye”");
 });
 
 await run("getPatchForEdit returns an updated file and diff hunks", () => {
@@ -58,6 +63,31 @@ await run("getPatchForEdit returns an updated file and diff hunks", () => {
   assert.equal(result.patch.length, 1);
   assert.ok(result.patch[0]?.lines.some((line) => line === "-two"));
   assert.ok(result.patch[0]?.lines.some((line) => line === "+TWO"));
+});
+
+await run("getPatchForEdits applies multiple edits sequentially", () => {
+  const result = getPatchForEdits({
+    filePath: "sample.txt",
+    fileContents: "one\ntwo\nthree\n",
+    edits: [
+      { old_string: "one", new_string: "ONE", replace_all: false },
+      { old_string: "three", new_string: "THREE", replace_all: false },
+    ],
+  });
+  assert.equal(result.updatedFile, "ONE\ntwo\nTHREE\n");
+});
+
+await run("getPatchForEdits rejects substring conflicts between edits", () => {
+  assert.throws(() => {
+    getPatchForEdits({
+      filePath: "sample.txt",
+      fileContents: "alpha\nbeta\n",
+      edits: [
+        { old_string: "alpha", new_string: "ALPHABET", replace_all: false },
+        { old_string: "ALPHA", new_string: "X", replace_all: false },
+      ],
+    });
+  });
 });
 
 await run("readFileInRange returns the requested line window", async () => {
@@ -139,6 +169,112 @@ await run("extractGlobBaseDirectory splits absolute glob patterns", () => {
   const extracted = extractGlobBaseDirectory("/repo/src/**/*.ts");
   assert.equal(extracted.baseDir, "/repo/src");
   assert.equal(extracted.relativePattern, "**/*.ts");
+});
+
+await run("parseCellId parses cell-N references", () => {
+  assert.equal(parseCellId("cell-5"), 5);
+  assert.equal(parseCellId("cell-0"), 0);
+  assert.equal(parseCellId("xyz"), undefined);
+  assert.equal(parseCellId("cell-abc"), undefined);
+});
+
+await run("encoding detection round-trips UTF-8 with BOM", () => {
+  const original = "hello\nworld\n";
+  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+  const buf = Buffer.concat([bom, Buffer.from(original, "utf8")]);
+  const detected = detectEncodingFromBuffer(buf);
+  assert.equal(detected.encoding, "utf8");
+  assert.equal(detected.hadBOM, true);
+  const decoded = decodeBuffer(buf, detected);
+  assert.equal(decoded, original);
+  const reencoded = encodeForWrite(decoded, detected);
+  assert.deepEqual(reencoded, buf);
+});
+
+await run("encoding detection round-trips UTF-16LE with BOM", () => {
+  const original = "hello\nworld\n";
+  const bom = Buffer.from([0xff, 0xfe]);
+  const body = Buffer.from(original, "utf16le");
+  const buf = Buffer.concat([bom, body]);
+  const detected = detectEncodingFromBuffer(buf);
+  assert.equal(detected.encoding, "utf16le");
+  assert.equal(detected.hadBOM, true);
+  const decoded = decodeBuffer(buf, detected);
+  assert.equal(decoded, original);
+});
+
+await run(
+  "readFileSyncWithMetadata normalizes CRLF and reports endings",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-crlf-"));
+    try {
+      const file = join(dir, "crlf.txt");
+      await writeFile(file, "line1\r\nline2\r\nline3\r\n");
+      const meta = readFileSyncWithMetadata(file);
+      assert.equal(meta.content, "line1\nline2\nline3\n");
+      assert.equal(meta.lineEndings, "CRLF");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+await run(
+  "findSimilarFile returns a sibling with different extension",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-similar-"));
+    try {
+      await writeFile(join(dir, "report.ts"), "// ts\n");
+      await writeFile(join(dir, "other.md"), "# unrelated\n");
+      const missing = join(dir, "report.tsx");
+      const match = findSimilarFile(missing);
+      assert.equal(match, "report.ts");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+await run(
+  "findSimilarFile returns undefined when no sibling exists",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-similar-"));
+    try {
+      await writeFile(join(dir, "other.md"), "# unrelated\n");
+      const missing = join(dir, "report.tsx");
+      const match = findSimilarFile(missing);
+      assert.equal(match, undefined);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+await run(
+  "fs_multi_edit getPatchForEdits handles empty old_string as full rewrite",
+  () => {
+    const result = getPatchForEdits({
+      filePath: "sample.txt",
+      fileContents: "old content\n",
+      edits: [
+        { old_string: "", new_string: "new content\n", replace_all: false },
+      ],
+    });
+    assert.equal(result.updatedFile, "new content\n");
+  },
+);
+
+await run("writeTextContent honors CRLF endings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-write-"));
+  try {
+    const file = join(dir, "out.txt");
+    const { writeTextContent } = await import("../src/utils/file.js");
+    writeTextContent(file, "line1\nline2\n", "utf8", "CRLF");
+    const buf = await readFile(file);
+    assert.ok(buf.toString().includes("line1\r\nline2\r\n"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 process.stdout.write(`PASS summary: ${passed} tests\n`);

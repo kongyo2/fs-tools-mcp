@@ -2,10 +2,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dirname } from "node:path";
 import { z } from "zod/v4";
 import { getPatchForDisplay } from "../utils/diff.js";
-import { writeTextContent } from "../utils/file.js";
+import { getFileModificationTime, writeTextContent } from "../utils/file.js";
 import { readFileSyncWithMetadata } from "../utils/fileRead.js";
 import { safeMkdir, toFsError } from "../utils/fsResult.js";
 import { expandPath } from "../utils/path.js";
+import type { SessionState } from "../state.js";
 
 const FILE_WRITE_TOOL_NAME = "fs_write";
 
@@ -32,7 +33,10 @@ const outputSchema = z.object({
   originalFile: z.string().nullable(),
 });
 
-export function registerFsWriteTool(server: McpServer): void {
+export function registerFsWriteTool(
+  server: McpServer,
+  state: SessionState,
+): void {
   server.registerTool(
     FILE_WRITE_TOOL_NAME,
     {
@@ -41,7 +45,8 @@ export function registerFsWriteTool(server: McpServer): void {
 
 Usage:
 - This tool will overwrite the existing file if there is one at the provided path.
-- Prefer fs_edit for modifying existing files and fs_write for creation or complete rewrites.`,
+- Prefer fs_edit for modifying existing files and fs_write for creation or complete rewrites.
+- Parent directories are created automatically.`,
       inputSchema,
       outputSchema,
       annotations: {
@@ -73,7 +78,22 @@ Usage:
           }
         }
 
-        writeTextContent(fullFilePath, content, meta?.encoding ?? "utf8", "LF");
+        // Honor explicit newlines in `content` instead of forcing LF — the
+        // caller may pass CRLF intentionally (Windows scripts, etc.).
+        writeTextContent(
+          fullFilePath,
+          content,
+          meta?.encoding ?? "utf8",
+          "LF",
+          meta?.detected,
+        );
+
+        state.readFileState.set(fullFilePath, {
+          content,
+          timestamp: getFileModificationTime(fullFilePath),
+          offset: undefined,
+          limit: undefined,
+        });
 
         if (meta !== null) {
           const patch = getPatchForDisplay({

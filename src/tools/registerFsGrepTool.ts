@@ -4,10 +4,9 @@ import { z } from "zod/v4";
 import { FILE_NOT_FOUND_CWD_NOTE, suggestPathUnderCwd } from "../utils/file.js";
 import { safeStat } from "../utils/fsResult.js";
 import { expandPath, toRelativePath } from "../utils/path.js";
-import { ripGrep } from "../utils/ripgrep.js";
+import { ripGrep, formatRipgrepCountSummary } from "../utils/ripgrep.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
 import { semanticNumber } from "../utils/semanticNumber.js";
-import { formatRipgrepCountSummary } from "../utils/ripgrep.js";
 import { plural } from "../utils/string.js";
 
 const GREP_TOOL_NAME = "fs_grep";

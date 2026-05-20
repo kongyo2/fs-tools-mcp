@@ -15,3 +15,18 @@ export function createSessionState(): SessionState {
     readFileState: new Map<string, ReadFileStateEntry>(),
   };
 }
+
+export function recordReadState(
+  state: SessionState,
+  fullPath: string,
+  entry: ReadFileStateEntry,
+): void {
+  state.readFileState.set(fullPath, entry);
+}
+
+export function getReadState(
+  state: SessionState,
+  fullPath: string,
+): ReadFileStateEntry | undefined {
+  return state.readFileState.get(fullPath);
+}

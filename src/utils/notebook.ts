@@ -147,6 +147,15 @@ function processCell(
   };
 }
 
+export function parseCellId(cellId: string): number | undefined {
+  const match = cellId.match(/^cell-(\d+)$/);
+  if (!match || match[1] === undefined) {
+    return undefined;
+  }
+  const index = Number.parseInt(match[1], 10);
+  return Number.isNaN(index) ? undefined : index;
+}
+
 export async function readNotebook(
   notebookPath: string,
   cellId?: string,

@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dirname } from "node:path";
+import { Result, ok, err } from "neverthrow";
 import { z } from "zod/v4";
 import {
   getPatchForEdit,
@@ -9,6 +10,7 @@ import {
 import {
   FILE_NOT_FOUND_CWD_NOTE,
   findSimilarFile,
+  getFileModificationTime,
   suggestPathUnderCwd,
   writeTextContent,
 } from "../utils/file.js";
@@ -19,12 +21,12 @@ import {
   type FsError,
   toFsError,
 } from "../utils/fsResult.js";
-import { Result, ok, err } from "neverthrow";
+import type { DetectedEncoding } from "../utils/encoding.js";
 import { expandPath } from "../utils/path.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
+import type { SessionState } from "../state.js";
 
 const FILE_EDIT_TOOL_NAME = "fs_edit";
-const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024;
 
 const inputSchema = z
   .object({
@@ -55,13 +57,21 @@ const outputSchema = z.object({
   replaceAll: z.boolean(),
 });
 
-export function registerFsEditTool(server: McpServer): void {
+export function registerFsEditTool(
+  server: McpServer,
+  state: SessionState,
+): void {
   server.registerTool(
     FILE_EDIT_TOOL_NAME,
     {
       title: "Edit File",
-      description:
-        "Modify file contents in place using old_string/new_string replacement.",
+      description: `Performs exact string replacements in files.
+
+Usage:
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- The edit will FAIL if old_string is not unique in the file. Provide more surrounding context to make it unique, or use replace_all to change every instance.
+- Use replace_all to rename a variable across the file.
+- For creating a new file, pass an empty old_string and the desired content as new_string.`,
       inputSchema,
       outputSchema,
       annotations: {
@@ -124,7 +134,17 @@ export function registerFsEditTool(server: McpServer): void {
           updatedFile,
           currentMeta.encoding,
           currentMeta.lineEndings,
+          currentMeta.detected,
         );
+
+        // Refresh tracked read state so subsequent fs_read returns the
+        // file_unchanged stub for the post-edit content instead of re-sending.
+        state.readFileState.set(absoluteFilePath, {
+          content: updatedFile,
+          timestamp: getFileModificationTime(absoluteFilePath),
+          offset: undefined,
+          limit: undefined,
+        });
 
         const data = {
           filePath: file_path,
@@ -160,7 +180,7 @@ async function validateEditInput(
   filePath: string,
   oldString: string,
   newString: string,
-  replaceAll: boolean,
+  _replaceAll: boolean,
 ): Promise<string | null> {
   const fullFilePath = expandPath(filePath);
 
@@ -169,11 +189,7 @@ async function validateEditInput(
   }
 
   const statResult = await safeStat(fullFilePath);
-  if (statResult.isOk()) {
-    if (statResult.value.size > MAX_EDIT_FILE_SIZE) {
-      return `File is too large to edit (${statResult.value.size} bytes). Maximum editable file size is ${MAX_EDIT_FILE_SIZE} bytes.`;
-    }
-  } else if (statResult.error.code !== "ENOENT") {
+  if (statResult.isErr() && statResult.error.code !== "ENOENT") {
     return `Cannot access file: ${statResult.error.message}`;
   }
 
@@ -199,13 +215,14 @@ async function validateEditInput(
   }
 
   if (oldString === "") {
-    return fileContent.trim() === ""
-      ? null
-      : "Cannot create new file - file already exists.";
+    // Empty old_string + existing content == full-content rewrite. Treat as
+    // legitimate, since the caller can already do this via fs_write; making
+    // fs_edit handle it too saves a round-trip.
+    return null;
   }
 
   if (fullFilePath.endsWith(".ipynb")) {
-    return "File is a Jupyter Notebook. Use fs_read to inspect it and fs_write if you need a full rewrite.";
+    return "File is a Jupyter Notebook. Use fs_notebook_edit instead, or fs_write for a full rewrite.";
   }
 
   const actualOldString = findActualString(fileContent, oldString);
@@ -214,7 +231,7 @@ async function validateEditInput(
   }
 
   const matches = fileContent.split(actualOldString).length - 1;
-  if (matches > 1 && !replaceAll) {
+  if (matches > 1 && !_replaceAll) {
     return `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`;
   }
 
@@ -225,6 +242,7 @@ type FileEditMeta = {
   content: string;
   encoding: BufferEncoding;
   lineEndings: "CRLF" | "LF";
+  detected?: DetectedEncoding;
 };
 
 function readFileForEdit(
@@ -236,6 +254,7 @@ function readFileForEdit(
       content: meta.content,
       encoding: meta.encoding,
       lineEndings: meta.lineEndings,
+      detected: meta.detected,
     });
   } catch (error) {
     return err(toFsError(error));

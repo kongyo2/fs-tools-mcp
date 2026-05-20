@@ -1,8 +1,28 @@
 import { execFile, spawn, type ExecFileException } from "node:child_process";
-import { rgPath } from "@vscode/ripgrep";
+import { existsSync } from "node:fs";
+import { rgPath as vendoredRgPath } from "@vscode/ripgrep";
 import { plural } from "./string.js";
 
 const MAX_BUFFER_SIZE = 20_000_000;
+
+let resolvedRgPath: string | undefined;
+
+function resolveRgPath(): string {
+  if (resolvedRgPath !== undefined) {
+    return resolvedRgPath;
+  }
+  const override = process.env.FS_TOOLS_MCP_RG_PATH;
+  if (override && existsSync(override)) {
+    resolvedRgPath = override;
+    return resolvedRgPath;
+  }
+  if (existsSync(vendoredRgPath)) {
+    resolvedRgPath = vendoredRgPath;
+    return resolvedRgPath;
+  }
+  resolvedRgPath = process.platform === "win32" ? "rg.exe" : "rg";
+  return resolvedRgPath;
+}
 
 export class RipgrepTimeoutError extends Error {
   constructor(
@@ -47,7 +67,7 @@ function ripGrepRaw(
 ): void {
   const fullArgs = [...(singleThread ? ["-j", "1"] : []), ...args, target];
   execFile(
-    rgPath,
+    resolveRgPath(),
     fullArgs,
     {
       encoding: "utf8",
@@ -130,7 +150,7 @@ export async function ripGrepStream(
   onLines: (lines: string[]) => void,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(rgPath, [...args, target], {
+    const child = spawn(resolveRgPath(), [...args, target], {
       signal: abortSignal,
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],

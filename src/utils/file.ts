@@ -9,13 +9,16 @@ import {
 } from "node:fs";
 import { stat as statAsync } from "node:fs/promises";
 import { dirname, extname, join, relative, sep } from "node:path";
+import { encodeForWrite, type DetectedEncoding } from "./encoding.js";
 import { formatFileSize } from "./format.js";
 import { isENOENT } from "./errors.js";
 import { safeReaddirSync } from "./fsResult.js";
 import { expandPath, getCwd } from "./path.js";
 import type { LineEndingType } from "./fileRead.js";
 
-export const MAX_OUTPUT_SIZE = 0.25 * 1024 * 1024;
+// Generous default; the MCP server should deliver bytes, not gatekeep
+// context size. Callers can override with FS_TOOLS_MCP_FILE_READ_MAX_BYTES.
+export const MAX_OUTPUT_SIZE = 8 * 1024 * 1024;
 export const FILE_NOT_FOUND_CWD_NOTE =
   "Note: your current working directory is";
 
@@ -34,18 +37,23 @@ export function writeTextContent(
   content: string,
   encoding: BufferEncoding,
   endings: LineEndingType,
+  detected?: DetectedEncoding,
 ): void {
   let toWrite = content;
   if (endings === "CRLF") {
     toWrite = content.replaceAll("\r\n", "\n").split("\n").join("\r\n");
+  }
+  if (detected) {
+    writeFileSyncAndFlush(filePath, encodeForWrite(toWrite, detected));
+    return;
   }
   writeFileSyncAndFlush(filePath, toWrite, { encoding });
 }
 
 export function writeFileSyncAndFlush(
   filePath: string,
-  content: string,
-  options: { encoding: BufferEncoding; mode?: number },
+  content: string | Buffer,
+  options: { encoding: BufferEncoding; mode?: number } = { encoding: "utf8" },
 ): void {
   const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
   let originalMode: number | undefined;
@@ -59,15 +67,26 @@ export function writeFileSyncAndFlush(
     }
   }
   try {
-    writeFileSync(tempPath, content, {
-      encoding: options.encoding,
-      flush: true,
-      ...(targetExists
-        ? {}
-        : options.mode !== undefined
-          ? { mode: options.mode }
-          : {}),
-    });
+    if (Buffer.isBuffer(content)) {
+      writeFileSync(tempPath, content, {
+        flush: true,
+        ...(targetExists
+          ? {}
+          : options.mode !== undefined
+            ? { mode: options.mode }
+            : {}),
+      });
+    } else {
+      writeFileSync(tempPath, content, {
+        encoding: options.encoding,
+        flush: true,
+        ...(targetExists
+          ? {}
+          : options.mode !== undefined
+            ? { mode: options.mode }
+            : {}),
+      });
+    }
     if (targetExists && originalMode !== undefined) {
       chmodSync(tempPath, originalMode);
     }
@@ -84,21 +103,24 @@ export function writeFileSyncAndFlush(
 
 export function findSimilarFile(filePath: string): string | undefined {
   const dir = dirname(filePath);
-  const fileBaseName = filePath.slice(
-    filePath.lastIndexOf(sep) + 1,
-    filePath.lastIndexOf(extname(filePath)),
-  );
+  const ext = extname(filePath);
+  const fileBaseName = ext
+    ? filePath.slice(filePath.lastIndexOf(sep) + 1).slice(0, -ext.length)
+    : filePath.slice(filePath.lastIndexOf(sep) + 1);
   const dirResult = safeReaddirSync(dir);
   if (dirResult.isErr()) {
     return undefined;
   }
-  const match = dirResult.value.find(
-    (entry) =>
-      entry.isFile() &&
-      entry.name !== filePath &&
-      entry.name.slice(0, entry.name.lastIndexOf(extname(entry.name))) ===
-        fileBaseName,
-  );
+  const match = dirResult.value.find((entry) => {
+    if (!entry.isFile() || entry.name === filePath) {
+      return false;
+    }
+    const entryExt = extname(entry.name);
+    const entryBase = entryExt
+      ? entry.name.slice(0, -entryExt.length)
+      : entry.name;
+    return entryBase === fileBaseName && entryExt !== ext;
+  });
   return match?.name;
 }
 

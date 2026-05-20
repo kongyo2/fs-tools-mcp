@@ -6,7 +6,6 @@ import {
   PDF_AT_MENTION_INLINE_THRESHOLD,
   PDF_MAX_PAGES_PER_READ,
 } from "../constants/apiLimits.js";
-import { hasBinaryExtension } from "../constants/files.js";
 import type { SessionState } from "../state.js";
 import {
   addLineNumbers,
@@ -18,6 +17,7 @@ import {
 import { safeStat } from "../utils/fsResult.js";
 import { isENOENT } from "../utils/errors.js";
 import { formatFileSize } from "../utils/format.js";
+import { createImageMetadataText } from "../utils/image.js";
 import { readNotebook } from "../utils/notebook.js";
 import { extractPDFPages, getPDFPageCount, readPDF } from "../utils/pdf.js";
 import { isPDFExtension, parsePDFPageRange } from "../utils/pdfUtils.js";
@@ -31,20 +31,7 @@ const FILE_READ_TOOL_NAME = "fs_read";
 const FILE_UNCHANGED_STUB =
   "File unchanged since last read. The content from the earlier fs_read tool_result in this conversation is still current; refer to that instead of re-reading.";
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
-const BLOCKED_DEVICE_PATHS = new Set([
-  "/dev/zero",
-  "/dev/random",
-  "/dev/urandom",
-  "/dev/full",
-  "/dev/stdin",
-  "/dev/tty",
-  "/dev/console",
-  "/dev/stdout",
-  "/dev/stderr",
-  "/dev/fd/0",
-  "/dev/fd/1",
-  "/dev/fd/2",
-]);
+const SVG_EXTENSIONS = new Set(["svg"]);
 const THIN_SPACE = String.fromCharCode(8239);
 
 const inputSchema = z
@@ -65,10 +52,6 @@ const inputSchema = z
   })
   .strict();
 
-// Detailed discriminated union for TypeScript type inference only.
-// NOT passed to MCP SDK's registerTool because the SDK's normalizeObjectSchema
-// cannot handle discriminatedUnion (returns undefined), which causes a crash
-// in safeParseAsync when isZ4Schema accesses undefined._zod.
 const readOutputUnion = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("text"),
@@ -130,7 +113,6 @@ const readOutputUnion = z.discriminatedUnion("type", [
 
 type ReadOutput = z.infer<typeof readOutputUnion>;
 
-// Flat object schema compatible with MCP SDK's normalizeObjectSchema.
 const outputSchema = z.object({
   type: z.enum(["text", "image", "notebook", "pdf", "parts", "file_unchanged"]),
   file: z.any(),
@@ -150,7 +132,7 @@ Usage:
 - The file_path parameter must be an absolute path, not a relative path.
 - By default, it reads from the beginning of the file.
 - You can optionally specify offset and limit for long files.
-- This tool can read images, Jupyter notebooks, and PDF files.
+- This tool can read images (PNG/JPG/GIF/WebP), SVG files, Jupyter notebooks, and PDF files.
 - For PDFs over ${PDF_AT_MENTION_INLINE_THRESHOLD} pages, you must provide the pages parameter.`,
       inputSchema,
       outputSchema,
@@ -182,48 +164,29 @@ Usage:
         }
 
         const fullFilePath = expandPath(file_path);
-        if (isBlockedDevicePath(fullFilePath)) {
-          return errorResult(
-            `Cannot read '${file_path}': this device file would block or produce infinite output.`,
-          );
-        }
-
-        const ext = fullFilePath.split(".").at(-1)?.toLowerCase() ?? "";
-        if (
-          hasBinaryExtension(fullFilePath) &&
-          !isPDFExtension(ext) &&
-          !IMAGE_EXTENSIONS.has(ext)
-        ) {
-          return errorResult(
-            `This tool cannot read binary files. The file appears to be a binary .${ext} file. Please use appropriate tools for binary file analysis.`,
-          );
-        }
 
         const existingState = state.readFileState.get(fullFilePath);
-        if (
-          existingState &&
-          !existingState.isPartialView &&
-          existingState.offset !== undefined &&
-          existingState.offset === offset &&
-          existingState.limit === limit
-        ) {
-          const mtimeResult = await safeStat(fullFilePath);
-          if (mtimeResult.isOk()) {
-            const mtimeMs = Math.floor(mtimeResult.value.mtimeMs);
-            if (mtimeMs === existingState.timestamp) {
-              const data: ReadOutput = {
-                type: "file_unchanged",
-                file: {
-                  filePath: file_path,
-                },
-              };
-              return {
-                content: [{ type: "text", text: FILE_UNCHANGED_STUB }],
-                structuredContent: data,
-              };
+        if (existingState && !existingState.isPartialView) {
+          const sameRange =
+            existingState.offset === offset && existingState.limit === limit;
+          if (sameRange) {
+            const mtimeResult = await safeStat(fullFilePath);
+            if (mtimeResult.isOk()) {
+              const mtimeMs = Math.floor(mtimeResult.value.mtimeMs);
+              if (mtimeMs === existingState.timestamp) {
+                const data: ReadOutput = {
+                  type: "file_unchanged",
+                  file: {
+                    filePath: file_path,
+                  },
+                };
+                return {
+                  content: [{ type: "text", text: FILE_UNCHANGED_STUB }],
+                  structuredContent: data,
+                };
+              }
             }
           }
-          // On stat failure (e.g. file deleted), fall through to full read.
         }
 
         const data = await callReadTool(
@@ -279,24 +242,12 @@ Usage:
   );
 }
 
-function isBlockedDevicePath(filePath: string): boolean {
-  if (BLOCKED_DEVICE_PATHS.has(filePath)) {
-    return true;
-  }
-  return (
-    filePath.startsWith("/proc/") &&
-    (filePath.endsWith("/fd/0") ||
-      filePath.endsWith("/fd/1") ||
-      filePath.endsWith("/fd/2"))
-  );
-}
-
 function getAlternateScreenshotPath(filePath: string): string | undefined {
   const filename = filePath.split(/[\\/]/).at(-1);
   if (!filename) {
     return undefined;
   }
-  const match = filename.match(/^(.+)([ \u202F])(AM|PM)(\.png)$/);
+  const match = filename.match(/^(.+)([  ])(AM|PM)(\.png)$/);
   if (!match) {
     return undefined;
   }
@@ -373,6 +324,7 @@ async function callReadTool(
     return pdf.data;
   }
 
+  // SVG and other text-based formats fall through to text reading.
   const lineOffset = offset === 0 ? 0 : offset - 1;
   const range = await readFileInRange(
     resolvedPath,
@@ -380,7 +332,11 @@ async function callReadTool(
     limit,
     limit === undefined ? limits.maxSizeBytes : undefined,
   );
-  validateContentTokens(range.content, limits.maxTokens);
+  if (SVG_EXTENSIONS.has(ext)) {
+    validateContentTokens(range.content, limits.maxTokens);
+  } else {
+    validateContentTokens(range.content, limits.maxTokens);
+  }
   state.readFileState.set(readStatePath, {
     content: range.content,
     timestamp: Math.floor(range.mtimeMs),
@@ -426,21 +382,29 @@ async function mapReadOutput(
         structuredContent: data,
       };
     }
-    case "image":
+    case "image": {
+      const blocks: any[] = [
+        {
+          type: "image",
+          data: data.file.base64,
+          mimeType: data.file.type,
+        },
+        {
+          type: "text",
+          text: `Read image (${formatFileSize(data.file.originalSize)})`,
+        },
+      ];
+      if (data.file.dimensions) {
+        const metaText = createImageMetadataText(data.file.dimensions);
+        if (metaText) {
+          blocks.push({ type: "text", text: metaText });
+        }
+      }
       return {
-        content: [
-          {
-            type: "image",
-            data: data.file.base64,
-            mimeType: data.file.type,
-          },
-          {
-            type: "text",
-            text: `Read image (${formatFileSize(data.file.originalSize)})`,
-          },
-        ],
+        content: blocks,
         structuredContent: data,
       };
+    }
     case "notebook": {
       const blocks: any[] = [];
       for (const cell of data.file.cells) {

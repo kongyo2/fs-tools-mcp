@@ -1,4 +1,6 @@
+import { stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
+import fg from "fast-glob";
 import { ripGrep } from "./ripgrep.js";
 
 export function extractGlobBaseDirectory(pattern: string): {
@@ -26,6 +28,42 @@ export function extractGlobBaseDirectory(pattern: string): {
     baseDir = `${baseDir}${sep}`;
   }
   return { baseDir, relativePattern };
+}
+
+async function fastGlobFallback(
+  pattern: string,
+  cwd: string,
+  abortSignal: AbortSignal,
+): Promise<string[]> {
+  const entries = await fg(pattern, {
+    cwd,
+    dot:
+      (process.env.FS_TOOLS_MCP_GLOB_HIDDEN ?? "true").toLowerCase() !==
+      "false",
+    onlyFiles: true,
+    absolute: true,
+    suppressErrors: true,
+    followSymbolicLinks: false,
+  });
+  if (abortSignal.aborted) {
+    throw new Error("Glob search aborted");
+  }
+  const withMtime = await Promise.all(
+    entries.map(async (entry) => {
+      try {
+        const stats = await stat(entry);
+        return [entry, stats.mtimeMs ?? 0] as const;
+      } catch {
+        return [entry, 0] as const;
+      }
+    }),
+  );
+  return withMtime
+    .sort((a, b) => {
+      const cmp = b[1] - a[1];
+      return cmp === 0 ? a[0].localeCompare(b[0]) : cmp;
+    })
+    .map(([entry]) => entry);
 }
 
 export async function glob(
@@ -57,10 +95,22 @@ export async function glob(
     ...(noIgnore ? ["--no-ignore"] : []),
     ...(hidden ? ["--hidden"] : []),
   ];
-  const allPaths = await ripGrep(args, searchDir, abortSignal);
-  const absolutePaths = allPaths.map((path) =>
-    isAbsolute(path) ? path : join(searchDir, path),
-  );
+  let absolutePaths: string[];
+  try {
+    const allPaths = await ripGrep(args, searchDir, abortSignal);
+    absolutePaths = allPaths.map((path) =>
+      isAbsolute(path) ? path : join(searchDir, path),
+    );
+  } catch (error) {
+    if (abortSignal.aborted) {
+      throw error;
+    }
+    absolutePaths = await fastGlobFallback(
+      searchPattern,
+      searchDir,
+      abortSignal,
+    );
+  }
   const truncated = absolutePaths.length > options.offset + options.limit;
   return {
     files: absolutePaths.slice(options.offset, options.offset + options.limit),
