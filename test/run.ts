@@ -277,4 +277,178 @@ await run("writeTextContent honors CRLF endings", async () => {
   }
 });
 
+await run(
+  "fs_multi_edit rejects ambiguous matches without replace_all",
+  async () => {
+    const { createServer } = await import("../src/server.js");
+    const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-multi-"));
+    try {
+      const file = join(dir, "sample.txt");
+      await writeFile(file, "alpha\nalpha\nbeta\n", "utf8");
+      const server = createServer() as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: unknown,
+            ) => Promise<{ isError?: boolean; content: { text: string }[] }>;
+          }
+        >;
+      };
+      const tool = server._registeredTools.fs_multi_edit!;
+      const result = await tool.handler({
+        file_path: file,
+        edits: [{ old_string: "alpha", new_string: "ALPHA" }],
+      });
+      assert.equal(result.isError, true);
+      assert.ok(result.content[0]!.text.includes("matches"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+await run(
+  "fs_notebook_edit converting markdown to code initializes execution_count/outputs",
+  async () => {
+    const { createServer } = await import("../src/server.js");
+    const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-nb-"));
+    try {
+      const file = join(dir, "notebook.ipynb");
+      const nb = {
+        cells: [
+          {
+            cell_type: "markdown",
+            id: "c1",
+            source: "# title",
+            metadata: {},
+          },
+        ],
+        metadata: { language_info: { name: "python" } },
+        nbformat: 4,
+        nbformat_minor: 5,
+      };
+      await writeFile(file, JSON.stringify(nb, null, 1), "utf8");
+      const server = createServer() as unknown as {
+        _registeredTools: Record<
+          string,
+          { handler: (args: unknown) => Promise<{ isError?: boolean }> }
+        >;
+      };
+      const tool = server._registeredTools.fs_notebook_edit!;
+      const result = await tool.handler({
+        notebook_path: file,
+        cell_id: "c1",
+        new_source: "print('hello')",
+        cell_type: "code",
+        edit_mode: "replace",
+      });
+      assert.equal(result.isError, undefined);
+      const written = JSON.parse(await readFile(file, "utf8"));
+      assert.equal(written.cells[0].cell_type, "code");
+      assert.equal(written.cells[0].execution_count, null);
+      assert.deepEqual(written.cells[0].outputs, []);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+await run("fs_notebook_edit delete does not require new_source", async () => {
+  const { createServer } = await import("../src/server.js");
+  const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-nb-"));
+  try {
+    const file = join(dir, "notebook.ipynb");
+    const nb = {
+      cells: [
+        {
+          cell_type: "code",
+          id: "c1",
+          source: "a",
+          metadata: {},
+          outputs: [],
+          execution_count: null,
+        },
+        {
+          cell_type: "code",
+          id: "c2",
+          source: "b",
+          metadata: {},
+          outputs: [],
+          execution_count: null,
+        },
+      ],
+      metadata: { language_info: { name: "python" } },
+      nbformat: 4,
+      nbformat_minor: 5,
+    };
+    await writeFile(file, JSON.stringify(nb, null, 1), "utf8");
+    const server = createServer() as unknown as {
+      _registeredTools: Record<
+        string,
+        { handler: (args: unknown) => Promise<{ isError?: boolean }> }
+      >;
+    };
+    const tool = server._registeredTools.fs_notebook_edit!;
+    const result = await tool.handler({
+      notebook_path: file,
+      cell_id: "c1",
+      edit_mode: "delete",
+    });
+    assert.equal(result.isError, undefined);
+    const written = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(written.cells.length, 1);
+    assert.equal(written.cells[0].id, "c2");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+await run(
+  "fs_notebook_edit replace without cell_id errors instead of coercing",
+  async () => {
+    const { createServer } = await import("../src/server.js");
+    const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-nb-"));
+    try {
+      const file = join(dir, "notebook.ipynb");
+      const nb = {
+        cells: [
+          {
+            cell_type: "code",
+            id: "c1",
+            source: "a",
+            metadata: {},
+            outputs: [],
+            execution_count: null,
+          },
+        ],
+        metadata: { language_info: { name: "python" } },
+        nbformat: 4,
+        nbformat_minor: 5,
+      };
+      await writeFile(file, JSON.stringify(nb, null, 1), "utf8");
+      const server = createServer() as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: unknown,
+            ) => Promise<{ isError?: boolean; content: { text: string }[] }>;
+          }
+        >;
+      };
+      const tool = server._registeredTools.fs_notebook_edit!;
+      const result = await tool.handler({
+        notebook_path: file,
+        new_source: "ignored",
+        edit_mode: "replace",
+      });
+      assert.equal(result.isError, true);
+      assert.ok(result.content[0]!.text.includes("cell_id is required"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 process.stdout.write(`PASS summary: ${passed} tests\n`);

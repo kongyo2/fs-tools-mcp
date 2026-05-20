@@ -147,23 +147,47 @@ Usage:
             replace_all: edit.replace_all ?? false,
           })),
         });
-        const editsWithActual = normalized.edits.map((edit) => {
+
+        // Walk the edits, resolving each against the file content as it
+        // evolves so that uniqueness checks see the same content the actual
+        // replacement will operate on.
+        const editsWithActual: typeof normalized.edits = [];
+        let projected = fileContent;
+        for (let i = 0; i < normalized.edits.length; i += 1) {
+          const edit = normalized.edits[i]!;
           if (edit.old_string === "") {
-            return edit;
+            // Empty old_string is a full-content replacement.
+            editsWithActual.push(edit);
+            projected = edit.new_string;
+            continue;
           }
           const actualOld =
-            findActualString(fileContent, edit.old_string) ?? edit.old_string;
+            findActualString(projected, edit.old_string) ?? edit.old_string;
           const actualNew = preserveQuoteStyle(
             edit.old_string,
             actualOld,
             edit.new_string,
           );
-          return {
+          if (!projected.includes(actualOld)) {
+            return errorResult(
+              `Edit #${i + 1}: string to replace not found in file (after previous edits).\nString: ${edit.old_string}`,
+            );
+          }
+          const occurrences = projected.split(actualOld).length - 1;
+          if (occurrences > 1 && !edit.replace_all) {
+            return errorResult(
+              `Edit #${i + 1}: found ${occurrences} matches but replace_all is false. Set replace_all to true, or provide more context to uniquely identify the instance.\nString: ${edit.old_string}`,
+            );
+          }
+          editsWithActual.push({
             old_string: actualOld,
             new_string: actualNew,
             replace_all: edit.replace_all,
-          };
-        });
+          });
+          projected = edit.replace_all
+            ? projected.replaceAll(actualOld, () => actualNew)
+            : projected.replace(actualOld, () => actualNew);
+        }
 
         const { patch, updatedFile } = getPatchForEdits({
           filePath: fullFilePath,

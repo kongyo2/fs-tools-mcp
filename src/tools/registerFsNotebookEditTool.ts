@@ -42,7 +42,12 @@ const inputSchema = z
       .describe(
         "The ID of the cell to edit. When inserting, the new cell will be inserted after this one; without it, at the beginning.",
       ),
-    new_source: z.string().describe("The new source for the cell"),
+    new_source: z
+      .string()
+      .optional()
+      .describe(
+        "The new source for the cell. Required for replace and insert; ignored for delete.",
+      ),
     cell_type: z
       .enum(["code", "markdown"])
       .optional()
@@ -109,6 +114,12 @@ Usage:
         if (edit_mode === "insert" && !cell_type) {
           return errorResult("cell_type is required when edit_mode is insert.");
         }
+        if (edit_mode !== "delete" && new_source === undefined) {
+          return errorResult(
+            "new_source is required when edit_mode is replace or insert.",
+          );
+        }
+        const sourceText = new_source ?? "";
 
         let meta: ReturnType<typeof readFileSyncWithMetadata>;
         try {
@@ -147,23 +158,26 @@ Usage:
           }
         }
 
+        if (edit_mode !== "insert" && cell_id === undefined) {
+          return errorResult("cell_id is required for replace and delete.");
+        }
+
         let resolvedEditMode: "replace" | "insert" | "delete" = edit_mode;
         let insertionIndex = cellIndex;
         if (resolvedEditMode === "insert") {
           insertionIndex = cell_id === undefined ? 0 : cellIndex + 1;
         }
+        // Convert replace to insert only when the resolved cell sits at the
+        // very end of the notebook (matches the reference behavior).
         if (
           resolvedEditMode === "replace" &&
-          (cellIndex === -1 || cellIndex === notebook.cells.length)
+          cellIndex === notebook.cells.length
         ) {
           resolvedEditMode = "insert";
           insertionIndex = notebook.cells.length;
           if (!cell_type) {
             cell_type = "code";
           }
-        }
-        if (resolvedEditMode !== "insert" && cellIndex === -1) {
-          return errorResult("cell_id is required for replace and delete.");
         }
 
         const language = notebook.metadata.language_info?.name ?? "python";
@@ -183,13 +197,13 @@ Usage:
               ? {
                   cell_type: "markdown",
                   id: newCellId,
-                  source: new_source,
+                  source: sourceText,
                   metadata: {},
                 }
               : {
                   cell_type: "code",
                   id: newCellId,
-                  source: new_source,
+                  source: sourceText,
                   metadata: {},
                   execution_count: null,
                   outputs: [],
@@ -201,17 +215,21 @@ Usage:
           if (!target) {
             return errorResult("Cell not found at resolved index.");
           }
-          target.source = new_source;
-          if (target.cell_type === "code") {
-            target.execution_count = null;
-            target.outputs = [];
-          }
+          target.source = sourceText;
           if (cell_type && cell_type !== target.cell_type) {
             target.cell_type = cell_type;
             if (cell_type === "markdown") {
               delete target.execution_count;
               delete target.outputs;
+            } else if (cell_type === "code") {
+              // Initialize code-cell fields per nbformat spec.
+              target.execution_count = null;
+              target.outputs = [];
             }
+          } else if (target.cell_type === "code") {
+            // Editing an existing code cell: reset execution state.
+            target.execution_count = null;
+            target.outputs = [];
           }
           resultingCellId = target.id ?? cell_id;
         }
@@ -245,7 +263,7 @@ Usage:
           cell_id: resultingCellId,
           cell_type: finalCellType,
           language,
-          new_source,
+          new_source: sourceText,
           original_file: meta.content,
           updated_file: updatedContent,
         };

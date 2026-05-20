@@ -137,8 +137,9 @@ Usage:
           currentMeta.detected,
         );
 
-        // Refresh tracked read state so subsequent fs_read returns the
-        // file_unchanged stub for the post-edit content instead of re-sending.
+        // Record the post-edit content and mtime. offset/limit are left
+        // undefined so the fs_read dedup gate skips this entry and the next
+        // fs_read returns the new content rather than a stale stub.
         state.readFileState.set(absoluteFilePath, {
           content: updatedFile,
           timestamp: getFileModificationTime(absoluteFilePath),

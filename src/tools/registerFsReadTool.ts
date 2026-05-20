@@ -166,7 +166,15 @@ Usage:
         const fullFilePath = expandPath(file_path);
 
         const existingState = state.readFileState.get(fullFilePath);
-        if (existingState && !existingState.isPartialView) {
+        // Only dedup against entries written by a previous fs_read; entries
+        // written by fs_edit / fs_write / fs_multi_edit / fs_notebook_edit
+        // leave offset undefined and must trigger a real read so the model
+        // sees the post-edit content.
+        if (
+          existingState &&
+          !existingState.isPartialView &&
+          existingState.offset !== undefined
+        ) {
           const sameRange =
             existingState.offset === offset && existingState.limit === limit;
           if (sameRange) {
