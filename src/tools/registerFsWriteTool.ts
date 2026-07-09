@@ -4,10 +4,14 @@ import { z } from "zod/v4";
 import { getPatchForDisplay } from "../utils/diff.js";
 import { writeTextContent } from "../utils/file.js";
 import { readFileSyncWithMetadata } from "../utils/fileRead.js";
-import { safeMkdir, toFsError } from "../utils/fsResult.js";
+import { safeMkdir, safeStat } from "../utils/fsResult.js";
 import { expandPath } from "../utils/path.js";
+import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const FILE_WRITE_TOOL_NAME = "fs_write";
+// Skip diff generation against existing content above this size; the write
+// itself still succeeds.
+const MAX_DIFF_FILE_SIZE = 16 * 1024 * 1024;
 
 const inputSchema = z
   .object({
@@ -54,6 +58,18 @@ Usage:
     async ({ file_path, content }) => {
       try {
         const fullFilePath = expandPath(file_path);
+        const statResult = await safeStat(fullFilePath);
+        let existingSize: number | null = null;
+        if (statResult.isOk()) {
+          if (statResult.value.isDirectory()) {
+            return errorResult(`Path is a directory: ${file_path}`);
+          }
+          existingSize = statResult.value.size;
+        } else if (statResult.error.code !== "ENOENT") {
+          return errorResult(`Cannot access path: ${statResult.error.message}`);
+        }
+        const fileExists = existingSize !== null;
+
         const mkdirResult = await safeMkdir(dirname(fullFilePath));
         if (mkdirResult.isErr()) {
           return errorResult(
@@ -61,43 +77,50 @@ Usage:
           );
         }
 
-        let meta: ReturnType<typeof readFileSyncWithMetadata> | null;
-        try {
-          meta = readFileSyncWithMetadata(fullFilePath);
-        } catch (error) {
-          const fsErr = toFsError(error);
-          if (fsErr.code === "ENOENT") {
+        // Read the existing content for the diff and to preserve encoding and
+        // line endings. If the existing file cannot be read (too large, not
+        // valid text, ...), still overwrite it - just without a diff.
+        let meta: ReturnType<typeof readFileSyncWithMetadata> | null = null;
+        if (existingSize !== null && existingSize <= MAX_DIFF_FILE_SIZE) {
+          try {
+            meta = readFileSyncWithMetadata(fullFilePath);
+          } catch {
             meta = null;
-          } else {
-            return errorResult(`Cannot read existing file: ${fsErr.message}`);
           }
         }
 
-        writeTextContent(fullFilePath, content, meta?.encoding ?? "utf8", "LF");
+        writeTextContent(
+          fullFilePath,
+          content,
+          meta?.encoding ?? "utf8",
+          meta?.lineEndings ?? "LF",
+        );
 
-        if (meta !== null) {
-          const patch = getPatchForDisplay({
-            filePath: file_path,
-            fileContents: meta.content,
-            edits: [
-              {
-                old_string: meta.content,
-                new_string: content,
-                replace_all: false,
-              },
-            ],
-          });
+        if (fileExists) {
+          const patch = meta
+            ? getPatchForDisplay({
+                filePath: file_path,
+                fileContents: meta.content,
+                edits: [
+                  {
+                    old_string: meta.content,
+                    new_string: content,
+                    replace_all: false,
+                  },
+                ],
+              })
+            : [];
           const data = {
             type: "update" as const,
             filePath: file_path,
             content,
             structuredPatch: patch,
-            originalFile: meta.content,
+            originalFile: meta?.content ?? null,
           };
           return {
             content: [
               {
-                type: "text",
+                type: "text" as const,
                 text: `The file ${file_path} has been updated successfully.`,
               },
             ],
@@ -115,24 +138,15 @@ Usage:
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `File created successfully at: ${file_path}`,
             },
           ],
           structuredContent: data,
         };
       } catch (error) {
-        return errorResult(
-          error instanceof Error ? error.message : String(error),
-        );
+        return unknownErrorResult(error);
       }
     },
   );
-}
-
-function errorResult(message: string): { content: any[]; isError: true } {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
-  };
 }

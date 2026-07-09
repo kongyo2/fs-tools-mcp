@@ -304,40 +304,6 @@ export async function compressImageBufferWithTokenLimit(
   return await compressImageBuffer(imageBuffer, maxBytes, originalMediaType);
 }
 
-export function createImageMetadataText(
-  dimensions: ImageDimensions,
-  sourcePath?: string,
-): string | null {
-  const { originalWidth, originalHeight, displayWidth, displayHeight } =
-    dimensions;
-  if (
-    !originalWidth ||
-    !originalHeight ||
-    !displayWidth ||
-    !displayHeight ||
-    displayWidth <= 0 ||
-    displayHeight <= 0
-  ) {
-    return sourcePath ? `[Image source: ${sourcePath}]` : null;
-  }
-  const wasResized =
-    originalWidth !== displayWidth || originalHeight !== displayHeight;
-  if (!wasResized && !sourcePath) {
-    return null;
-  }
-  const parts: string[] = [];
-  if (sourcePath) {
-    parts.push(`source: ${sourcePath}`);
-  }
-  if (wasResized) {
-    const scaleFactor = originalWidth / displayWidth;
-    parts.push(
-      `original ${originalWidth}x${originalHeight}, displayed at ${displayWidth}x${displayHeight}. Multiply coordinates by ${scaleFactor.toFixed(2)} to map to original image.`,
-    );
-  }
-  return `[Image: ${parts.join(", ")}]`;
-}
-
 export function assertImageFitsApi(base64: string): void {
   if (base64.length > API_IMAGE_MAX_BASE64_SIZE) {
     throw new ImageResizeError(

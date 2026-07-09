@@ -5,8 +5,6 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 25_000;
 export type FileReadingLimits = {
   maxTokens: number;
   maxSizeBytes: number;
-  includeMaxSizeInPrompt?: boolean;
-  targetedRangeNudge?: boolean;
 };
 
 export function getDefaultFileReadingLimits(): FileReadingLimits {

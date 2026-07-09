@@ -1,10 +1,3 @@
-export class AbortError extends Error {
-  constructor(message = "Aborted") {
-    super(message);
-    this.name = "AbortError";
-  }
-}
-
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

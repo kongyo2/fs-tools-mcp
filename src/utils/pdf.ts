@@ -96,10 +96,6 @@ export async function getPDFPageCount(
 
 let pdftoppmAvailable: boolean | undefined;
 
-export function resetPdftoppmCache(): void {
-  pdftoppmAvailable = undefined;
-}
-
 export async function isPdftoppmAvailable(): Promise<boolean> {
   if (pdftoppmAvailable !== undefined) {
     return pdftoppmAvailable;
@@ -202,7 +198,8 @@ export async function extractPDFPages(
         success: false,
         error: {
           reason: "corrupted",
-          message: "pdftoppm produced no output pages. The PDF may be invalid.",
+          message:
+            "pdftoppm produced no output pages. The PDF may be invalid, or the requested page range may be beyond the end of the document.",
         },
       };
     }

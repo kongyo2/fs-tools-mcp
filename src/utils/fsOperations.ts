@@ -1,10 +1,4 @@
-import * as fs from "node:fs";
-import {
-  open,
-  readFile as readFileAsync,
-  readdir,
-  stat,
-} from "node:fs/promises";
+import { open, readFile as readFileAsync } from "node:fs/promises";
 
 export async function readFileBytes(
   path: string,
@@ -36,9 +30,3 @@ export async function readFileBytes(
     await fileHandle.close();
   }
 }
-
-export const fsSync = fs;
-export const fsAsync = {
-  readdir,
-  stat,
-};

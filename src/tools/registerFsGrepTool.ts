@@ -7,8 +7,13 @@ import { expandPath, toRelativePath } from "../utils/path.js";
 import { ripGrep } from "../utils/ripgrep.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
 import { semanticNumber } from "../utils/semanticNumber.js";
-import { formatRipgrepCountSummary } from "../utils/ripgrep.js";
-import { plural } from "../utils/string.js";
+import {
+  applyHeadLimit,
+  parseRipgrepContentLine,
+  renderGrepText,
+  type GrepOutput,
+} from "./grepUtils.js";
+import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const GREP_TOOL_NAME = "fs_grep";
 const VCS_DIRECTORIES_TO_EXCLUDE = [
@@ -19,7 +24,11 @@ const VCS_DIRECTORIES_TO_EXCLUDE = [
   ".jj",
   ".sl",
 ] as const;
-const DEFAULT_HEAD_LIMIT = 250;
+const RIPGREP_TIMEOUT_MS = 60_000;
+
+const contextLinesSchema = semanticNumber(
+  z.number().int().nonnegative().optional(),
+);
 
 const inputSchema = z
   .object({
@@ -42,14 +51,14 @@ const inputSchema = z
       .enum(["content", "files_with_matches", "count"])
       .optional()
       .describe("Output mode. Defaults to files_with_matches."),
-    "-B": semanticNumber(z.number().optional()).describe(
+    "-B": contextLinesSchema.describe(
       "Number of lines to show before each match.",
     ),
-    "-A": semanticNumber(z.number().optional()).describe(
+    "-A": contextLinesSchema.describe(
       "Number of lines to show after each match.",
     ),
-    "-C": semanticNumber(z.number().optional()).describe("Alias for context."),
-    context: semanticNumber(z.number().optional()).describe(
+    "-C": contextLinesSchema.describe("Alias for context."),
+    context: contextLinesSchema.describe(
       "Number of lines to show before and after each match.",
     ),
     "-n": semanticBoolean(z.boolean().optional()).describe(
@@ -127,24 +136,19 @@ Usage:
 
         const output = await runGrep(input);
         return {
-          content: [{ type: "text", text: renderGrepText(output) }],
+          content: [{ type: "text" as const, text: renderGrepText(output) }],
           structuredContent: output,
         };
       } catch (error) {
-        return errorResult(
-          error instanceof Error ? error.message : String(error),
-        );
+        return unknownErrorResult(error);
       }
     },
   );
 }
 
-async function runGrep(
-  input: z.infer<typeof inputSchema>,
-): Promise<z.infer<typeof outputSchema>> {
+function buildRipgrepArgs(input: z.infer<typeof inputSchema>): string[] {
   const {
     pattern,
-    path,
     glob,
     type,
     output_mode = "files_with_matches",
@@ -154,12 +158,9 @@ async function runGrep(
     context,
     "-n": showLineNumbers = true,
     "-i": caseInsensitive = false,
-    head_limit,
-    offset = 0,
     multiline = false,
   } = input;
 
-  const absolutePath = path ? expandPath(path) : process.cwd();
   const args = ["--hidden"];
   for (const dir of VCS_DIRECTORIES_TO_EXCLUDE) {
     args.push("--glob", `!${dir}`);
@@ -176,14 +177,18 @@ async function runGrep(
   } else if (output_mode === "count") {
     args.push("-c");
   }
-  if (showLineNumbers && output_mode === "content") {
-    args.push("-n");
+  if (output_mode === "content" || output_mode === "count") {
+    // Always print the file name, even when searching a single file, so the
+    // output format stays parseable.
+    args.push("--with-filename");
   }
   if (output_mode === "content") {
-    if (context !== undefined) {
-      args.push("-C", String(context));
-    } else if (contextC !== undefined) {
-      args.push("-C", String(contextC));
+    if (showLineNumbers) {
+      args.push("-n");
+    }
+    const symmetricContext = context ?? contextC;
+    if (symmetricContext !== undefined) {
+      args.push("-C", String(symmetricContext));
     } else {
       if (contextBefore !== undefined) {
         args.push("-B", String(contextBefore));
@@ -192,6 +197,9 @@ async function runGrep(
         args.push("-A", String(contextAfter));
       }
     }
+    // Emit context lines with the same "path:line:" format as match lines so
+    // both parse uniformly.
+    args.push("--field-context-separator", ":");
   }
   if (pattern.startsWith("-")) {
     args.push("-e", pattern);
@@ -216,11 +224,20 @@ async function runGrep(
       }
     }
   }
+  return args;
+}
 
+async function runGrep(
+  input: z.infer<typeof inputSchema>,
+): Promise<GrepOutput> {
+  const { path, output_mode = "files_with_matches", head_limit } = input;
+  const offset = input.offset ?? 0;
+
+  const absolutePath = path ? expandPath(path) : process.cwd();
   const results = await ripGrep(
-    args,
+    buildRipgrepArgs(input),
     absolutePath,
-    AbortSignal.timeout(60_000),
+    AbortSignal.timeout(RIPGREP_TIMEOUT_MS),
   );
 
   if (output_mode === "content") {
@@ -313,101 +330,5 @@ async function runGrep(
       ? { appliedLimit: limited.appliedLimit }
       : {}),
     ...(offset > 0 ? { appliedOffset: offset } : {}),
-  };
-}
-
-/**
- * Parses a ripgrep content-mode output line to extract the file path.
- * Handles both line-numbered output (filepath:linenum:content) and
- * plain output (filepath:content), including Windows drive-letter paths.
- */
-function parseRipgrepContentLine(
-  line: string,
-): { filePath: string; rest: string } | null {
-  // Match line with line numbers: filepath:linenum:content
-  const lineNumMatch = line.match(/^(.+?):(\d+):/);
-  if (lineNumMatch) {
-    return {
-      filePath: lineNumMatch[1],
-      rest: line.slice(lineNumMatch[1].length),
-    };
-  }
-  // Fallback for no line numbers: filepath:content
-  // Skip Windows drive letter (e.g., C:\...)
-  const startIdx =
-    line.length > 2 && line[1] === ":" && /^[a-zA-Z]$/.test(line[0]) ? 2 : 0;
-  const colonIndex = line.indexOf(":", startIdx);
-  if (colonIndex > 0) {
-    return {
-      filePath: line.slice(0, colonIndex),
-      rest: line.slice(colonIndex),
-    };
-  }
-  return null;
-}
-
-function applyHeadLimit<T>(
-  items: T[],
-  limit: number | undefined,
-  offset = 0,
-): { items: T[]; appliedLimit: number | undefined } {
-  const safeOffset = Math.max(0, offset);
-  if (limit === 0) {
-    return { items: items.slice(safeOffset), appliedLimit: undefined };
-  }
-  const effectiveLimit = Math.max(1, limit ?? DEFAULT_HEAD_LIMIT);
-  const sliced = items.slice(safeOffset, safeOffset + effectiveLimit);
-  const wasTruncated = items.length - safeOffset > effectiveLimit;
-  return {
-    items: sliced,
-    appliedLimit: wasTruncated ? effectiveLimit : undefined,
-  };
-}
-
-function formatLimitInfo(
-  appliedLimit: number | undefined,
-  appliedOffset: number | undefined,
-): string {
-  const parts: string[] = [];
-  if (appliedLimit !== undefined) {
-    parts.push(`limit: ${appliedLimit}`);
-  }
-  if (appliedOffset) {
-    parts.push(`offset: ${appliedOffset}`);
-  }
-  return parts.join(", ");
-}
-
-function renderGrepText(output: z.infer<typeof outputSchema>): string {
-  const mode = output.mode ?? "files_with_matches";
-  if (mode === "content") {
-    const result = output.content || "No matches found";
-    const limitInfo = formatLimitInfo(
-      output.appliedLimit,
-      output.appliedOffset,
-    );
-    return limitInfo
-      ? `${result}\n\n[Showing results with pagination = ${limitInfo}]`
-      : result;
-  }
-  if (mode === "count") {
-    const rawContent = output.content || "No matches found";
-    const limitInfo = formatLimitInfo(
-      output.appliedLimit,
-      output.appliedOffset,
-    );
-    return `${rawContent}\n\n${formatRipgrepCountSummary(output.numMatches ?? 0, output.numFiles ?? 0)}${limitInfo ? ` with pagination = ${limitInfo}` : ""}`;
-  }
-  const limitInfo = formatLimitInfo(output.appliedLimit, output.appliedOffset);
-  if (output.numFiles === 0) {
-    return "No files found";
-  }
-  return `Found ${output.numFiles} ${plural(output.numFiles, "file")}${limitInfo ? ` ${limitInfo}` : ""}\n${output.filenames.join("\n")}`;
-}
-
-function errorResult(message: string): { content: any[]; isError: true } {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
   };
 }

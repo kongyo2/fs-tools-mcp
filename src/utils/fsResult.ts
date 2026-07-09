@@ -1,7 +1,7 @@
 import { Result, ResultAsync, ok, err } from "neverthrow";
 import { stat as statAsync, mkdir as mkdirAsync } from "node:fs/promises";
 import type { Stats, Dirent } from "node:fs";
-import { statSync, readdirSync, mkdirSync } from "node:fs";
+import { readdirSync, mkdirSync } from "node:fs";
 
 export interface FsError {
   code: string;
@@ -30,14 +30,6 @@ export function safeMkdir(dirPath: string): ResultAsync<void, FsError> {
     mkdirAsync(dirPath, { recursive: true }).then(() => undefined),
     toFsError,
   );
-}
-
-export function safeStatSync(path: string): Result<Stats, FsError> {
-  try {
-    return ok(statSync(path));
-  } catch (error) {
-    return err(toFsError(error));
-  }
 }
 
 export function safeReaddirSync(dirPath: string): Result<Dirent[], FsError> {

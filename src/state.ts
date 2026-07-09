@@ -1,9 +1,7 @@
 export type ReadFileStateEntry = {
-  content: string;
   timestamp: number;
   offset?: number;
   limit?: number;
-  isPartialView?: boolean;
 };
 
 export type SessionState = {

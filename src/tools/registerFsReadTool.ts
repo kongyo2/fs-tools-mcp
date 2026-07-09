@@ -1,33 +1,37 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type {
+  CallToolResult,
+  ContentBlock,
+} from "@modelcontextprotocol/sdk/types.js";
 import { readdir, readFile as readFileAsync } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod/v4";
 import {
-  PDF_AT_MENTION_INLINE_THRESHOLD,
+  PDF_MAX_INLINE_PAGES,
   PDF_MAX_PAGES_PER_READ,
 } from "../constants/apiLimits.js";
 import { hasBinaryExtension } from "../constants/files.js";
 import type { SessionState } from "../state.js";
 import {
   addLineNumbers,
-  FILE_NOT_FOUND_CWD_NOTE,
-  findSimilarFile,
+  fileNotFoundMessage,
   getFileModificationTimeAsync,
-  suggestPathUnderCwd,
 } from "../utils/file.js";
 import { safeStat } from "../utils/fsResult.js";
 import { isENOENT } from "../utils/errors.js";
 import { formatFileSize } from "../utils/format.js";
-import { readNotebook } from "../utils/notebook.js";
+import { readNotebook, type NotebookCellSource } from "../utils/notebook.js";
 import { extractPDFPages, getPDFPageCount, readPDF } from "../utils/pdf.js";
 import { isPDFExtension, parsePDFPageRange } from "../utils/pdfUtils.js";
-import { expandPath } from "../utils/path.js";
+import { expandPath, getLowercaseExtension } from "../utils/path.js";
 import { readFileInRange } from "../utils/readFileInRange.js";
 import { semanticNumber } from "../utils/semanticNumber.js";
 import { getDefaultFileReadingLimits } from "./fsReadLimits.js";
 import { readImageWithTokenBudget } from "./sharedRead.js";
+import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const FILE_READ_TOOL_NAME = "fs_read";
+const DEFAULT_READ_LINE_LIMIT = 2000;
 const FILE_UNCHANGED_STUB =
   "File unchanged since last read. The content from the earlier fs_read tool_result in this conversation is still current; refer to that instead of re-reading.";
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
@@ -54,7 +58,7 @@ const inputSchema = z
       "The line number to start reading from. Only provide if the file is too large to read at once.",
     ),
     limit: semanticNumber(z.number().int().positive().optional()).describe(
-      "The number of lines to read. Only provide if the file is too large to read at once.",
+      `The number of lines to read. Defaults to ${DEFAULT_READ_LINE_LIMIT}. Only provide if the file is too large to read at once.`,
     ),
     pages: z
       .string()
@@ -65,72 +69,66 @@ const inputSchema = z
   })
   .strict();
 
-// Detailed discriminated union for TypeScript type inference only.
-// NOT passed to MCP SDK's registerTool because the SDK's normalizeObjectSchema
-// cannot handle discriminatedUnion (returns undefined), which causes a crash
-// in safeParseAsync when isZ4Schema accesses undefined._zod.
-const readOutputUnion = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("text"),
-    file: z.object({
-      filePath: z.string(),
-      content: z.string(),
-      numLines: z.number(),
-      startLine: z.number(),
-      totalLines: z.number(),
-    }),
-  }),
-  z.object({
-    type: z.literal("image"),
-    file: z.object({
-      base64: z.string(),
-      type: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]),
-      originalSize: z.number(),
-      dimensions: z
-        .object({
-          originalWidth: z.number().optional(),
-          originalHeight: z.number().optional(),
-          displayWidth: z.number().optional(),
-          displayHeight: z.number().optional(),
-        })
-        .optional(),
-    }),
-  }),
-  z.object({
-    type: z.literal("notebook"),
-    file: z.object({
-      filePath: z.string(),
-      cells: z.array(z.any()),
-    }),
-  }),
-  z.object({
-    type: z.literal("pdf"),
-    file: z.object({
-      filePath: z.string(),
-      base64: z.string(),
-      originalSize: z.number(),
-    }),
-  }),
-  z.object({
-    type: z.literal("parts"),
-    file: z.object({
-      filePath: z.string(),
-      originalSize: z.number(),
-      count: z.number(),
-      outputDir: z.string(),
-    }),
-  }),
-  z.object({
-    type: z.literal("file_unchanged"),
-    file: z.object({
-      filePath: z.string(),
-    }),
-  }),
-]);
+type ReadOutput =
+  | {
+      type: "text";
+      file: {
+        filePath: string;
+        content: string;
+        numLines: number;
+        startLine: number;
+        totalLines: number;
+        truncated?: boolean;
+      };
+    }
+  | {
+      type: "image";
+      file: {
+        base64: string;
+        type: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+        originalSize: number;
+        dimensions?: {
+          originalWidth?: number;
+          originalHeight?: number;
+          displayWidth?: number;
+          displayHeight?: number;
+        };
+      };
+    }
+  | {
+      type: "notebook";
+      file: {
+        filePath: string;
+        cells: NotebookCellSource[];
+      };
+    }
+  | {
+      type: "pdf";
+      file: {
+        filePath: string;
+        base64: string;
+        originalSize: number;
+      };
+    }
+  | {
+      type: "parts";
+      file: {
+        filePath: string;
+        originalSize: number;
+        count: number;
+        outputDir: string;
+      };
+    }
+  | {
+      type: "file_unchanged";
+      file: {
+        filePath: string;
+      };
+    };
 
-type ReadOutput = z.infer<typeof readOutputUnion>;
-
-// Flat object schema compatible with MCP SDK's normalizeObjectSchema.
+// Flat object schema: the MCP SDK's schema normalization cannot handle a
+// zod discriminated union (it returns undefined and later crashes), so the
+// detailed shape lives in the ReadOutput type above instead.
 const outputSchema = z.object({
   type: z.enum(["text", "image", "notebook", "pdf", "parts", "file_unchanged"]),
   file: z.any(),
@@ -148,10 +146,10 @@ export function registerFsReadTool(
 
 Usage:
 - The file_path parameter must be an absolute path, not a relative path.
-- By default, it reads from the beginning of the file.
+- By default, it reads up to ${DEFAULT_READ_LINE_LIMIT} lines from the beginning of the file.
 - You can optionally specify offset and limit for long files.
 - This tool can read images, Jupyter notebooks, and PDF files.
-- For PDFs over ${PDF_AT_MENTION_INLINE_THRESHOLD} pages, you must provide the pages parameter.`,
+- For PDFs over ${PDF_MAX_INLINE_PAGES} pages, you must provide the pages parameter.`,
       inputSchema,
       outputSchema,
       annotations: {
@@ -162,6 +160,9 @@ Usage:
       },
     },
     async ({ file_path, offset = 1, limit, pages }) => {
+      // Treat offset 0 and 1 identically as "start of file" so line numbers
+      // in the output always match the 1-indexed offset parameter.
+      const startLine = Math.max(offset, 1);
       try {
         if (pages !== undefined) {
           const parsed = parsePDFPageRange(pages);
@@ -188,7 +189,12 @@ Usage:
           );
         }
 
-        const ext = fullFilePath.split(".").at(-1)?.toLowerCase() ?? "";
+        const ext = getLowercaseExtension(fullFilePath);
+        if (pages !== undefined && !isPDFExtension(ext)) {
+          return errorResult(
+            `The pages parameter is only supported for PDF files, but the file has extension ".${ext}".`,
+          );
+        }
         if (
           hasBinaryExtension(fullFilePath) &&
           !isPDFExtension(ext) &&
@@ -202,9 +208,7 @@ Usage:
         const existingState = state.readFileState.get(fullFilePath);
         if (
           existingState &&
-          !existingState.isPartialView &&
-          existingState.offset !== undefined &&
-          existingState.offset === offset &&
+          existingState.offset === startLine &&
           existingState.limit === limit
         ) {
           const mtimeResult = await safeStat(fullFilePath);
@@ -223,13 +227,13 @@ Usage:
               };
             }
           }
-          // On stat failure (e.g. file deleted), fall through to full read.
+          // On stat failure (e.g. file deleted), fall through to a full read.
         }
 
         const data = await callReadTool(
           file_path,
           fullFilePath,
-          offset,
+          startLine,
           limit,
           pages,
           state,
@@ -244,7 +248,7 @@ Usage:
               const data = await callReadTool(
                 file_path,
                 alternatePath,
-                offset,
+                startLine,
                 limit,
                 pages,
                 state,
@@ -253,27 +257,13 @@ Usage:
               return await mapReadOutput(data);
             } catch (retryError) {
               if (!isENOENT(retryError)) {
-                return errorResult(
-                  retryError instanceof Error
-                    ? retryError.message
-                    : String(retryError),
-                );
+                return unknownErrorResult(retryError);
               }
             }
           }
-          const cwdSuggestion = await suggestPathUnderCwd(fullFilePath);
-          const similarFilename = findSimilarFile(fullFilePath);
-          let message = `File does not exist. ${FILE_NOT_FOUND_CWD_NOTE} ${process.cwd()}.`;
-          if (cwdSuggestion) {
-            message += ` Did you mean ${cwdSuggestion}?`;
-          } else if (similarFilename) {
-            message += ` Did you mean ${similarFilename}?`;
-          }
-          return errorResult(message);
+          return errorResult(await fileNotFoundMessage(fullFilePath));
         }
-        return errorResult(
-          error instanceof Error ? error.message : String(error),
-        );
+        return unknownErrorResult(error);
       }
     },
   );
@@ -311,24 +301,22 @@ function getAlternateScreenshotPath(filePath: string): string | undefined {
 async function callReadTool(
   requestedPath: string,
   resolvedPath: string,
-  offset: number,
+  startLine: number,
   limit: number | undefined,
   pages: string | undefined,
   state: SessionState,
   readStatePathOverride?: string,
 ): Promise<ReadOutput> {
   const readStatePath = readStatePathOverride ?? resolvedPath;
-  const ext = resolvedPath.split(".").at(-1)?.toLowerCase() ?? "";
+  const ext = getLowercaseExtension(resolvedPath);
   const limits = getDefaultFileReadingLimits();
 
   if (ext === "ipynb") {
     const cells = await readNotebook(resolvedPath);
-    const serialized = JSON.stringify(cells);
-    validateContentTokens(serialized, limits.maxTokens);
+    validateContentTokens(JSON.stringify(cells), limits.maxTokens);
     state.readFileState.set(readStatePath, {
-      content: serialized,
       timestamp: await getFileModificationTimeAsync(resolvedPath),
-      offset,
+      offset: startLine,
       limit,
     });
     return {
@@ -359,7 +347,7 @@ async function callReadTool(
       return extracted.data;
     }
     const pageCount = await getPDFPageCount(resolvedPath);
-    if (pageCount !== null && pageCount > PDF_AT_MENTION_INLINE_THRESHOLD) {
+    if (pageCount !== null && pageCount > PDF_MAX_INLINE_PAGES) {
       throw new Error(
         `This PDF has ${pageCount} pages, which is too many to read at once. Use the pages parameter to read specific page ranges (e.g., pages: "1-5"). Maximum ${PDF_MAX_PAGES_PER_READ} pages per request.`,
       );
@@ -373,18 +361,22 @@ async function callReadTool(
     return pdf.data;
   }
 
-  const lineOffset = offset === 0 ? 0 : offset - 1;
+  // Cap the byte budget so the returned content always fits the token budget
+  // (4 bytes/token estimate); overly long content is truncated with a notice
+  // instead of failing the whole read.
+  const byteBudget = Math.min(limits.maxSizeBytes, limits.maxTokens * 4);
   const range = await readFileInRange(
     resolvedPath,
-    lineOffset,
-    limit,
-    limit === undefined ? limits.maxSizeBytes : undefined,
+    startLine - 1,
+    limit ?? DEFAULT_READ_LINE_LIMIT,
+    byteBudget,
+    undefined,
+    { truncateOnByteLimit: true },
   );
   validateContentTokens(range.content, limits.maxTokens);
   state.readFileState.set(readStatePath, {
-    content: range.content,
     timestamp: Math.floor(range.mtimeMs),
-    offset,
+    offset: startLine,
     limit,
   });
   return {
@@ -393,8 +385,9 @@ async function callReadTool(
       filePath: requestedPath,
       content: range.content,
       numLines: range.lineCount,
-      startLine: offset,
+      startLine,
       totalLines: range.totalLines,
+      ...(range.truncatedByBytes ? { truncated: true } : {}),
     },
   };
 }
@@ -408,24 +401,40 @@ function validateContentTokens(content: string, maxTokens: number): void {
   }
 }
 
-async function mapReadOutput(
-  data: ReadOutput,
-): Promise<{ content: any[]; structuredContent: ReadOutput }> {
+function renderTextRead(file: {
+  content: string;
+  numLines: number;
+  startLine: number;
+  totalLines: number;
+  truncated?: boolean;
+}): string {
+  if (file.content) {
+    const text = addLineNumbers({
+      content: file.content,
+      startLine: file.startLine,
+    });
+    if (!file.truncated) {
+      return text;
+    }
+    const lastLine = file.startLine + file.numLines - 1;
+    return `${text}\n\n<system-reminder>Output truncated at the byte limit: showing lines ${file.startLine}-${lastLine} of ${file.totalLines} total lines. Use offset and limit parameters to read further portions of the file.</system-reminder>`;
+  }
+  if (file.truncated) {
+    return `<system-reminder>Warning: the first requested line is longer than the output byte limit and could not be returned. Search within the file instead of reading it directly.</system-reminder>`;
+  }
+  if (file.totalLines === 0) {
+    return "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>";
+  }
+  return `<system-reminder>Warning: the file exists but is shorter than the provided offset (${file.startLine}). The file has ${file.totalLines} lines.</system-reminder>`;
+}
+
+async function mapReadOutput(data: ReadOutput): Promise<CallToolResult> {
   switch (data.type) {
-    case "text": {
-      const text = data.file.content
-        ? addLineNumbers({
-            content: data.file.content,
-            startLine: data.file.startLine,
-          })
-        : data.file.totalLines === 0
-          ? "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
-          : `<system-reminder>Warning: the file exists but is shorter than the provided offset (${data.file.startLine}). The file has ${data.file.totalLines} lines.</system-reminder>`;
+    case "text":
       return {
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: renderTextRead(data.file) }],
         structuredContent: data,
       };
-    }
     case "image":
       return {
         content: [
@@ -442,7 +451,7 @@ async function mapReadOutput(
         structuredContent: data,
       };
     case "notebook": {
-      const blocks: any[] = [];
+      const blocks: ContentBlock[] = [];
       for (const cell of data.file.cells) {
         const metadata: string[] = [];
         if (cell.cellType !== "code") {
@@ -491,13 +500,13 @@ async function mapReadOutput(
       const imageFiles = (await readdir(data.file.outputDir))
         .filter((file) => file.endsWith(".jpg"))
         .sort();
-      const imageBlocks = await Promise.all(
+      const imageBlocks: ContentBlock[] = await Promise.all(
         imageFiles.map(async (file) => {
           const imageBuffer = await readFileAsync(
             join(data.file.outputDir, file),
           );
           return {
-            type: "image",
+            type: "image" as const,
             data: imageBuffer.toString("base64"),
             mimeType: "image/jpeg",
           };
@@ -520,11 +529,4 @@ async function mapReadOutput(
         structuredContent: data,
       };
   }
-}
-
-function errorResult(message: string): { content: any[]; isError: true } {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
-  };
 }

@@ -40,14 +40,15 @@ export async function readFileInRange(
       `EISDIR: illegal operation on a directory, read '${filePath}'`,
     );
   }
+  if (
+    !truncateOnByteLimit &&
+    maxBytes !== undefined &&
+    stats.isFile() &&
+    stats.size > maxBytes
+  ) {
+    throw new FileTooLargeError(stats.size, maxBytes);
+  }
   if (stats.isFile() && stats.size < FAST_PATH_MAX_SIZE) {
-    if (
-      !truncateOnByteLimit &&
-      maxBytes !== undefined &&
-      stats.size > maxBytes
-    ) {
-      throw new FileTooLargeError(stats.size, maxBytes);
-    }
     const text = await readFile(filePath, { encoding: "utf8", signal });
     return readFileInRangeFast(
       text,
@@ -59,6 +60,7 @@ export async function readFileInRange(
   }
   return await readFileInRangeStreaming(
     filePath,
+    stats.mtimeMs,
     offset,
     maxLines,
     maxBytes,
@@ -146,6 +148,7 @@ function readFileInRangeFast(
 
 async function readFileInRangeStreaming(
   filePath: string,
+  mtimeMs: number,
   offset: number,
   maxLines: number | undefined,
   maxBytes: number | undefined,
@@ -172,16 +175,7 @@ async function readFileInRangeStreaming(
       selectedLines: [] as string[],
       partial: "",
       firstChunk: true,
-      mtimeMs: 0,
     };
-
-    stream.once("open", async () => {
-      try {
-        state.mtimeMs = (await stat(filePath)).mtimeMs;
-      } catch {
-        state.mtimeMs = 0;
-      }
-    });
 
     stream.on("data", (chunk: string | Buffer) => {
       let currentChunk =
@@ -292,7 +286,7 @@ async function readFileInRangeStreaming(
         totalLines: state.currentLineIndex,
         totalBytes: state.totalBytesRead,
         readBytes: Buffer.byteLength(content, "utf8"),
-        mtimeMs: state.mtimeMs,
+        mtimeMs,
         ...(state.truncatedByBytes ? { truncatedByBytes: true } : {}),
       });
     });

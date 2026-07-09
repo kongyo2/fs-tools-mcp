@@ -1,25 +1,26 @@
-import { readFileSync } from "node:fs";
-import { readFileBytes } from "./fsOperations.js";
+import { closeSync, openSync, readSync, readFileSync } from "node:fs";
 
 export type LineEndingType = "CRLF" | "LF";
+
+const BOM_UTF16LE = [0xff, 0xfe] as const;
 
 export function detectEncodingForResolvedPath(
   resolvedPath: string,
 ): BufferEncoding {
-  const buffer = readFileSync(resolvedPath);
-  if (buffer.length === 0) {
-    return "utf8";
-  }
-  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
-    return "utf16le";
+  const header = Buffer.alloc(2);
+  const fd = openSync(resolvedPath, "r");
+  let bytesRead = 0;
+  try {
+    bytesRead = readSync(fd, header, 0, header.length, 0);
+  } finally {
+    closeSync(fd);
   }
   if (
-    buffer.length >= 3 &&
-    buffer[0] === 0xef &&
-    buffer[1] === 0xbb &&
-    buffer[2] === 0xbf
+    bytesRead >= 2 &&
+    header[0] === BOM_UTF16LE[0] &&
+    header[1] === BOM_UTF16LE[1]
   ) {
-    return "utf8";
+    return "utf16le";
   }
   return "utf8";
 }
@@ -46,24 +47,6 @@ export function readFileSyncWithMetadata(filePath: string): {
 } {
   const encoding = detectEncodingForResolvedPath(filePath);
   const raw = readFileSync(filePath, { encoding });
-  return {
-    content: raw.replaceAll("\r\n", "\n"),
-    encoding,
-    lineEndings: detectLineEndingsForString(raw.slice(0, 4096)),
-  };
-}
-
-export async function readFileWithMetadata(filePath: string): Promise<{
-  content: string;
-  encoding: BufferEncoding;
-  lineEndings: LineEndingType;
-}> {
-  const buffer = await readFileBytes(filePath);
-  const encoding: BufferEncoding =
-    buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe
-      ? "utf16le"
-      : "utf8";
-  const raw = buffer.toString(encoding);
   return {
     content: raw.replaceAll("\r\n", "\n"),
     encoding,
