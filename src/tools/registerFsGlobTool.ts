@@ -4,8 +4,13 @@ import { glob } from "../utils/glob.js";
 import { FILE_NOT_FOUND_CWD_NOTE, suggestPathUnderCwd } from "../utils/file.js";
 import { safeStat } from "../utils/fsResult.js";
 import { expandPath, toRelativePath } from "../utils/path.js";
+import { semanticNumber } from "../utils/semanticNumber.js";
+import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const GLOB_TOOL_NAME = "fs_glob";
+const DEFAULT_GLOB_LIMIT = 100;
+const MAX_GLOB_LIMIT = 1000;
+const GLOB_TIMEOUT_MS = 60_000;
 
 const inputSchema = z
   .object({
@@ -16,6 +21,14 @@ const inputSchema = z
       .describe(
         "The directory to search in. If not specified, the current working directory will be used.",
       ),
+    limit: semanticNumber(
+      z.number().int().positive().max(MAX_GLOB_LIMIT).optional(),
+    ).describe(
+      `Maximum number of files to return. Defaults to ${DEFAULT_GLOB_LIMIT}.`,
+    ),
+    offset: semanticNumber(z.number().int().nonnegative().optional()).describe(
+      "Number of files to skip before returning results, for pagination.",
+    ),
   })
   .strict();
 
@@ -35,7 +48,7 @@ export function registerFsGlobTool(server: McpServer): void {
 
 Usage:
 - Supports glob patterns like "**/*.js" or "src/**/*.ts".
-- Returns matching file paths sorted by modification time.
+- Returns matching file paths sorted by modification time (newest first).
 - Use this tool when you need to find files by name patterns.`,
       inputSchema,
       outputSchema,
@@ -46,7 +59,7 @@ Usage:
         openWorldHint: false,
       },
     },
-    async ({ pattern, path }) => {
+    async ({ pattern, path, limit = DEFAULT_GLOB_LIMIT, offset = 0 }) => {
       try {
         if (path) {
           const absolutePath = expandPath(path);
@@ -73,8 +86,8 @@ Usage:
         const result = await glob(
           pattern,
           path ? expandPath(path) : process.cwd(),
-          { limit: 100, offset: 0 },
-          AbortSignal.timeout(60_000),
+          { limit, offset },
+          AbortSignal.timeout(GLOB_TIMEOUT_MS),
         );
         const filenames = result.files.map(toRelativePath);
         const output = {
@@ -86,7 +99,7 @@ Usage:
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text:
                 filenames.length === 0
                   ? "No files found"
@@ -94,7 +107,7 @@ Usage:
                       ...filenames,
                       ...(result.truncated
                         ? [
-                            "(Results are truncated. Consider using a more specific path or pattern.)",
+                            "(Results are truncated. Consider using a more specific path or pattern, or increase the offset to paginate.)",
                           ]
                         : []),
                     ].join("\n"),
@@ -103,17 +116,8 @@ Usage:
           structuredContent: output,
         };
       } catch (error) {
-        return errorResult(
-          error instanceof Error ? error.message : String(error),
-        );
+        return unknownErrorResult(error);
       }
     },
   );
-}
-
-function errorResult(message: string): { content: any[]; isError: true } {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
-  };
 }

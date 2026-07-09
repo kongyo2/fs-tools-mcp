@@ -1,36 +1,45 @@
 {
   "name": "@kongyo2/fs-tools-mcp",
-  "version": "0.1.2",
-  "description": "MCP server that ports filesystem read/edit/write/glob/grep tools from the provided reference implementation.",
+  "version": "0.2.0",
+  "description": "MCP server that provides filesystem read/edit/write/glob/grep tools.",
+  "license": "MIT",
   "type": "module",
   "main": "dist/src/index.js",
   "bin": {
     "fs-tools-mcp": "dist/src/index.js"
   },
   "files": [
-    "dist"
+    "dist/src"
   ],
   "engines": {
     "node": ">=20"
   },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "filesystem",
+    "ripgrep",
+    "glob",
+    "grep"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "node --eval \"import('node:fs/promises').then(fs => fs.rm('dist', { recursive: true, force: true }))\"",
     "start": "node dist/src/index.js",
     "dev": "tsx src/index.ts",
-    "test": "npm run build && node dist/test/run.js",
+    "test": "npm run clean && npm run build && cd dist/test && node --test",
     "lint": "oxlint --silent",
     "lint:strict": "oxlint --deny-warnings",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run typecheck && npm run test && npm run format:check && npm run lint"
+    "check": "npm run typecheck && npm run test && npm run format:check && npm run lint",
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@vscode/ripgrep": "1.17.1",
     "diff": "8.0.4",
-    "ignore": "7.0.5",
     "neverthrow": "^8.2.0",
     "sharp": "0.34.5",
     "zod": "3.25.76"

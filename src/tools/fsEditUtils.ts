@@ -1,8 +1,5 @@
 import type { StructuredPatchHunk } from "diff";
 import { getPatchFromContents } from "../utils/diff.js";
-import { readFileSyncCached } from "../utils/file.js";
-import { errorMessage, isENOENT } from "../utils/errors.js";
-import { expandPath } from "../utils/path.js";
 
 export const LEFT_SINGLE_CURLY_QUOTE = "\u2018";
 export const RIGHT_SINGLE_CURLY_QUOTE = "\u2019";
@@ -23,19 +20,6 @@ export function normalizeQuotes(value: string): string {
     .replaceAll(RIGHT_DOUBLE_CURLY_QUOTE, '"');
 }
 
-export function stripTrailingWhitespace(value: string): string {
-  const parts = value.split(/(\r\n|\n|\r)/);
-  let result = "";
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
-    if (part === undefined) {
-      continue;
-    }
-    result += index % 2 === 0 ? part.replace(/\s+$/, "") : part;
-  }
-  return result;
-}
-
 export function findActualString(
   fileContent: string,
   searchString: string,
@@ -50,6 +34,10 @@ export function findActualString(
     return null;
   }
   return fileContent.substring(searchIndex, searchIndex + searchString.length);
+}
+
+export function countOccurrences(content: string, search: string): number {
+  return search === "" ? 0 : content.split(search).length - 1;
 }
 
 function isOpeningContext(chars: string[], index: number): boolean {
@@ -217,32 +205,4 @@ export function getPatchForEdits(params: {
     }),
     updatedFile,
   };
-}
-
-export function normalizeFileEditInput(input: {
-  file_path: string;
-  edits: FileEdit[];
-}): { file_path: string; edits: FileEdit[] } {
-  if (input.edits.length === 0) {
-    return input;
-  }
-  const isMarkdown = /\.(md|mdx)$/i.test(input.file_path);
-  try {
-    const fileContent = readFileSyncCached(expandPath(input.file_path));
-    return {
-      file_path: input.file_path,
-      edits: input.edits.map((edit) => ({
-        ...edit,
-        new_string:
-          fileContent.includes(edit.old_string) || isMarkdown
-            ? edit.new_string
-            : stripTrailingWhitespace(edit.new_string),
-      })),
-    };
-  } catch (error) {
-    if (!isENOENT(error)) {
-      throw new Error(errorMessage(error), { cause: error });
-    }
-  }
-  return input;
 }

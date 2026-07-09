@@ -2,16 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dirname } from "node:path";
 import { z } from "zod/v4";
 import {
+  countOccurrences,
   getPatchForEdit,
   findActualString,
   preserveQuoteStyle,
 } from "./fsEditUtils.js";
-import {
-  FILE_NOT_FOUND_CWD_NOTE,
-  findSimilarFile,
-  suggestPathUnderCwd,
-  writeTextContent,
-} from "../utils/file.js";
+import { fileNotFoundMessage, writeTextContent } from "../utils/file.js";
 import { readFileSyncWithMetadata } from "../utils/fileRead.js";
 import {
   safeStat,
@@ -22,9 +18,12 @@ import {
 import { Result, ok, err } from "neverthrow";
 import { expandPath } from "../utils/path.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
+import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const FILE_EDIT_TOOL_NAME = "fs_edit";
-const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024;
+// Keep well below V8's maximum string length (~512 MB) so the file can be
+// read into a single string safely.
+const MAX_EDIT_FILE_SIZE = 256 * 1024 * 1024;
 
 const inputSchema = z
   .object({
@@ -73,17 +72,18 @@ export function registerFsEditTool(server: McpServer): void {
     },
     async ({ file_path, old_string, new_string, replace_all = false }) => {
       try {
-        const validationError = await validateEditInput(
-          file_path,
+        const absoluteFilePath = expandPath(file_path);
+        const prepared = await prepareEdit(
+          absoluteFilePath,
           old_string,
           new_string,
           replace_all,
         );
-        if (validationError) {
-          return errorResult(validationError);
+        if (!prepared.ok) {
+          return errorResult(prepared.message);
         }
+        const { meta, actualOldString } = prepared;
 
-        const absoluteFilePath = expandPath(file_path);
         const mkdirResult = await safeMkdir(dirname(absoluteFilePath));
         if (mkdirResult.isErr()) {
           return errorResult(
@@ -91,21 +91,6 @@ export function registerFsEditTool(server: McpServer): void {
           );
         }
 
-        const currentMetaResult = readFileForEdit(absoluteFilePath);
-        if (
-          currentMetaResult.isErr() &&
-          currentMetaResult.error.code !== "ENOENT"
-        ) {
-          return errorResult(
-            `Cannot read file for editing: ${currentMetaResult.error.message}`,
-          );
-        }
-        const currentMeta: FileEditMeta = currentMetaResult.isOk()
-          ? currentMetaResult.value
-          : { content: "", encoding: "utf8", lineEndings: "LF" };
-
-        const actualOldString =
-          findActualString(currentMeta.content, old_string) ?? old_string;
         const actualNewString = preserveQuoteStyle(
           old_string,
           actualOldString,
@@ -113,7 +98,7 @@ export function registerFsEditTool(server: McpServer): void {
         );
         const { patch, updatedFile } = getPatchForEdit({
           filePath: absoluteFilePath,
-          fileContents: currentMeta.content,
+          fileContents: meta.content,
           oldString: actualOldString,
           newString: actualNewString,
           replaceAll: replace_all,
@@ -122,15 +107,15 @@ export function registerFsEditTool(server: McpServer): void {
         writeTextContent(
           absoluteFilePath,
           updatedFile,
-          currentMeta.encoding,
-          currentMeta.lineEndings,
+          meta.encoding,
+          meta.lineEndings,
         );
 
         const data = {
           filePath: file_path,
           oldString: actualOldString,
-          newString: new_string,
-          originalFile: currentMeta.content,
+          newString: actualNewString,
+          originalFile: meta.content,
           structuredPatch: patch,
           userModified: false,
           replaceAll: replace_all,
@@ -139,7 +124,7 @@ export function registerFsEditTool(server: McpServer): void {
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: replace_all
                 ? `The file ${file_path} has been updated. All occurrences were successfully replaced.`
                 : `The file ${file_path} has been updated successfully.`,
@@ -148,77 +133,10 @@ export function registerFsEditTool(server: McpServer): void {
           structuredContent: data,
         };
       } catch (error) {
-        return errorResult(
-          error instanceof Error ? error.message : String(error),
-        );
+        return unknownErrorResult(error);
       }
     },
   );
-}
-
-async function validateEditInput(
-  filePath: string,
-  oldString: string,
-  newString: string,
-  replaceAll: boolean,
-): Promise<string | null> {
-  const fullFilePath = expandPath(filePath);
-
-  if (oldString === newString) {
-    return "No changes to make: old_string and new_string are exactly the same.";
-  }
-
-  const statResult = await safeStat(fullFilePath);
-  if (statResult.isOk()) {
-    if (statResult.value.size > MAX_EDIT_FILE_SIZE) {
-      return `File is too large to edit (${statResult.value.size} bytes). Maximum editable file size is ${MAX_EDIT_FILE_SIZE} bytes.`;
-    }
-  } else if (statResult.error.code !== "ENOENT") {
-    return `Cannot access file: ${statResult.error.message}`;
-  }
-
-  const readResult = readFileForEdit(fullFilePath);
-  const fileContent = readResult.isOk() ? readResult.value.content : null;
-  if (readResult.isErr() && readResult.error.code !== "ENOENT") {
-    return `Cannot read file: ${readResult.error.message}`;
-  }
-
-  if (fileContent === null) {
-    if (oldString === "") {
-      return null;
-    }
-    const cwdSuggestion = await suggestPathUnderCwd(fullFilePath);
-    const similarFilename = findSimilarFile(fullFilePath);
-    let message = `File does not exist. ${FILE_NOT_FOUND_CWD_NOTE} ${process.cwd()}.`;
-    if (cwdSuggestion) {
-      message += ` Did you mean ${cwdSuggestion}?`;
-    } else if (similarFilename) {
-      message += ` Did you mean ${similarFilename}?`;
-    }
-    return message;
-  }
-
-  if (oldString === "") {
-    return fileContent.trim() === ""
-      ? null
-      : "Cannot create new file - file already exists.";
-  }
-
-  if (fullFilePath.endsWith(".ipynb")) {
-    return "File is a Jupyter Notebook. Use fs_read to inspect it and fs_write if you need a full rewrite.";
-  }
-
-  const actualOldString = findActualString(fileContent, oldString);
-  if (!actualOldString) {
-    return `String to replace not found in file.\nString: ${oldString}`;
-  }
-
-  const matches = fileContent.split(actualOldString).length - 1;
-  if (matches > 1 && !replaceAll) {
-    return `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`;
-  }
-
-  return null;
 }
 
 type FileEditMeta = {
@@ -226,6 +144,99 @@ type FileEditMeta = {
   encoding: BufferEncoding;
   lineEndings: "CRLF" | "LF";
 };
+
+type PreparedEdit =
+  | { ok: true; meta: FileEditMeta; actualOldString: string }
+  | { ok: false; message: string };
+
+async function prepareEdit(
+  fullFilePath: string,
+  oldString: string,
+  newString: string,
+  replaceAll: boolean,
+): Promise<PreparedEdit> {
+  if (oldString === newString) {
+    return {
+      ok: false,
+      message:
+        "No changes to make: old_string and new_string are exactly the same.",
+    };
+  }
+
+  const statResult = await safeStat(fullFilePath);
+  if (statResult.isOk()) {
+    if (statResult.value.isDirectory()) {
+      return { ok: false, message: `Path is a directory: ${fullFilePath}` };
+    }
+    if (statResult.value.size > MAX_EDIT_FILE_SIZE) {
+      return {
+        ok: false,
+        message: `File is too large to edit (${statResult.value.size} bytes). Maximum editable file size is ${MAX_EDIT_FILE_SIZE} bytes.`,
+      };
+    }
+  } else if (statResult.error.code !== "ENOENT") {
+    return {
+      ok: false,
+      message: `Cannot access file: ${statResult.error.message}`,
+    };
+  }
+
+  const readResult = readFileForEdit(fullFilePath);
+  if (readResult.isErr()) {
+    if (readResult.error.code !== "ENOENT") {
+      return {
+        ok: false,
+        message: `Cannot read file: ${readResult.error.message}`,
+      };
+    }
+    if (oldString === "") {
+      // Creating a new file.
+      return {
+        ok: true,
+        meta: { content: "", encoding: "utf8", lineEndings: "LF" },
+        actualOldString: oldString,
+      };
+    }
+    return { ok: false, message: await fileNotFoundMessage(fullFilePath) };
+  }
+
+  const meta = readResult.value;
+  if (oldString === "") {
+    if (meta.content.trim() !== "") {
+      return {
+        ok: false,
+        message: "Cannot create new file - file already exists.",
+      };
+    }
+    return { ok: true, meta, actualOldString: oldString };
+  }
+
+  if (fullFilePath.endsWith(".ipynb")) {
+    return {
+      ok: false,
+      message:
+        "File is a Jupyter Notebook. Use fs_read to inspect it and fs_write if you need a full rewrite.",
+    };
+  }
+
+  const actualOldString = findActualString(meta.content, oldString);
+  if (!actualOldString) {
+    return {
+      ok: false,
+      message: `String to replace not found in file.\nString: ${oldString}`,
+    };
+  }
+
+  const matches = countOccurrences(meta.content, actualOldString);
+  if (matches > 1 && !replaceAll) {
+    return {
+      ok: false,
+      message: `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`,
+    };
+  }
+
+  return { ok: true, meta, actualOldString };
+}
 
 function readFileForEdit(
   absoluteFilePath: string,
@@ -240,11 +251,4 @@ function readFileForEdit(
   } catch (error) {
     return err(toFsError(error));
   }
-}
-
-function errorResult(message: string): { content: any[]; isError: true } {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
-  };
 }

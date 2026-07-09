@@ -1,25 +1,26 @@
-import { readFileSync } from "node:fs";
-import { readFileBytes } from "./fsOperations.js";
+import { closeSync, openSync, readSync, readFileSync } from "node:fs";
 
 export type LineEndingType = "CRLF" | "LF";
+
+const BOM_UTF16LE = [0xff, 0xfe] as const;
 
 export function detectEncodingForResolvedPath(
   resolvedPath: string,
 ): BufferEncoding {
-  const buffer = readFileSync(resolvedPath);
-  if (buffer.length === 0) {
-    return "utf8";
-  }
-  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
-    return "utf16le";
+  const header = Buffer.alloc(2);
+  const fd = openSync(resolvedPath, "r");
+  let bytesRead = 0;
+  try {
+    bytesRead = readSync(fd, header, 0, header.length, 0);
+  } finally {
+    closeSync(fd);
   }
   if (
-    buffer.length >= 3 &&
-    buffer[0] === 0xef &&
-    buffer[1] === 0xbb &&
-    buffer[2] === 0xbf
+    bytesRead >= 2 &&
+    header[0] === BOM_UTF16LE[0] &&
+    header[1] === BOM_UTF16LE[1]
   ) {
-    return "utf8";
+    return "utf16le";
   }
   return "utf8";
 }
@@ -53,20 +54,33 @@ export function readFileSyncWithMetadata(filePath: string): {
   };
 }
 
-export async function readFileWithMetadata(filePath: string): Promise<{
-  content: string;
+const METADATA_SNIFF_BYTES = 16 * 1024;
+
+// Detects encoding and line endings from the head of the file without
+// reading the whole file, so metadata can be preserved even for files too
+// large to load into memory.
+export function sniffFileTextMetadata(filePath: string): {
   encoding: BufferEncoding;
   lineEndings: LineEndingType;
-}> {
-  const buffer = await readFileBytes(filePath);
+} {
+  const buffer = Buffer.alloc(METADATA_SNIFF_BYTES);
+  const fd = openSync(filePath, "r");
+  let bytesRead = 0;
+  try {
+    bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+  } finally {
+    closeSync(fd);
+  }
+  const header = buffer.subarray(0, bytesRead);
   const encoding: BufferEncoding =
-    buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe
+    bytesRead >= 2 &&
+    header[0] === BOM_UTF16LE[0] &&
+    header[1] === BOM_UTF16LE[1]
       ? "utf16le"
       : "utf8";
-  const raw = buffer.toString(encoding);
+  const sample = header.toString(encoding).slice(0, 4096);
   return {
-    content: raw.replaceAll("\r\n", "\n"),
     encoding,
-    lineEndings: detectLineEndingsForString(raw.slice(0, 4096)),
+    lineEndings: detectLineEndingsForString(sample),
   };
 }

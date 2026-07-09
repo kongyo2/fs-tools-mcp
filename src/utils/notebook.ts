@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { errorMessage } from "./errors.js";
+
 type NotebookCellOutput = {
   output_type: string;
   text?: string | string[];
@@ -106,9 +109,7 @@ function processOutput(output: NotebookCellOutput): NotebookCellSourceOutput {
     case "error":
       return {
         output_type: output.output_type,
-        text: processOutputText(
-          `${output.ename ?? "Error"}: ${output.evalue ?? ""}\n${(output.traceback ?? []).join("\n")}`,
-        ),
+        text: `${output.ename ?? "Error"}: ${output.evalue ?? ""}\n${(output.traceback ?? []).join("\n")}`,
       };
     default:
       return {
@@ -151,9 +152,21 @@ export async function readNotebook(
   notebookPath: string,
   cellId?: string,
 ): Promise<NotebookCellSource[]> {
-  const { readFile } = await import("node:fs/promises");
   const content = await readFile(notebookPath, "utf8");
-  const notebook = JSON.parse(content) as NotebookContent;
+  let notebook: NotebookContent;
+  try {
+    notebook = JSON.parse(content) as NotebookContent;
+  } catch (error) {
+    throw new Error(
+      `Notebook is not valid JSON (${errorMessage(error)}): ${notebookPath}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(notebook.cells)) {
+    throw new Error(
+      `Notebook has no cells array; the file may not be a valid Jupyter notebook: ${notebookPath}`,
+    );
+  }
   const language = notebook.metadata?.language_info?.name ?? "python";
   if (cellId) {
     const targetCell = notebook.cells.find((cell) => cell.id === cellId);

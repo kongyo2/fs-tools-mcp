@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import {
-  dirname,
+  extname,
   isAbsolute,
   normalize,
   relative,
@@ -46,11 +46,7 @@ export function toRelativePath(absolutePath: string): string {
   return relativePath.startsWith("..") ? absolutePath : relativePath;
 }
 
-export function getDirectoryForPath(inputPath: string): string {
-  const absolutePath = expandPath(inputPath);
-  return dirname(absolutePath);
-}
-
-export function containsPathTraversal(inputPath: string): boolean {
-  return /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(inputPath);
+export function getLowercaseExtension(filePath: string): string {
+  const ext = extname(filePath);
+  return ext.startsWith(".") ? ext.slice(1).toLowerCase() : ext.toLowerCase();
 }

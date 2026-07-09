@@ -53,7 +53,7 @@ export async function glob(
     "--files",
     "--glob",
     searchPattern,
-    "--sort=modified",
+    "--sortr=modified",
     ...(noIgnore ? ["--no-ignore"] : []),
     ...(hidden ? ["--hidden"] : []),
   ];

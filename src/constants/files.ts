@@ -1,3 +1,5 @@
+import { extname } from "node:path";
+
 const BINARY_EXTENSIONS = new Set([
   ".png",
   ".jpg",
@@ -96,9 +98,6 @@ const BINARY_EXTENSIONS = new Set([
 ]);
 
 export function hasBinaryExtension(filePath: string): boolean {
-  const dotIndex = filePath.lastIndexOf(".");
-  if (dotIndex === -1) {
-    return false;
-  }
-  return BINARY_EXTENSIONS.has(filePath.slice(dotIndex).toLowerCase());
+  const ext = extname(filePath).toLowerCase();
+  return ext !== "" && BINARY_EXTENSIONS.has(ext);
 }
