@@ -1,18 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { readNotebook } from "../src/utils/notebook.js";
+import { withTempDir as withPrefixedTempDir } from "./helpers.js";
 
-async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-nb-"));
-  try {
-    await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
+const withTempDir = (fn: (dir: string) => Promise<void>) =>
+  withPrefixedTempDir("fs-tools-mcp-nb-", fn);
 
 test("readNotebook parses cells with language metadata", async () => {
   await withTempDir(async (dir) => {

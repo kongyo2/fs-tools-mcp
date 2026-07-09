@@ -30,6 +30,14 @@ test("parseRipgrepContentLine skips Windows drive letters", () => {
   });
 });
 
+test("parseRipgrepContentLine skips Windows drive letters without line numbers", () => {
+  const parsed = parseRipgrepContentLine("C:\\repo\\a.ts:let y;");
+  assert.deepEqual(parsed, {
+    filePath: "C:\\repo\\a.ts",
+    rest: ":let y;",
+  });
+});
+
 test("parseRipgrepContentLine passes through group separators", () => {
   assert.equal(parseRipgrepContentLine("--"), null);
 });

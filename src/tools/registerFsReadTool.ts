@@ -78,6 +78,7 @@ type ReadOutput =
         numLines: number;
         startLine: number;
         totalLines: number;
+        totalLinesIsLowerBound?: boolean;
         truncated?: boolean;
       };
     }
@@ -363,7 +364,9 @@ async function callReadTool(
 
   // Cap the byte budget so the returned content always fits the token budget
   // (4 bytes/token estimate); overly long content is truncated with a notice
-  // instead of failing the whole read.
+  // instead of failing the whole read. Scanning stops once the requested
+  // range is filled, so huge files are not read to the end just to count
+  // their lines.
   const byteBudget = Math.min(limits.maxSizeBytes, limits.maxTokens * 4);
   const range = await readFileInRange(
     resolvedPath,
@@ -371,7 +374,7 @@ async function callReadTool(
     limit ?? DEFAULT_READ_LINE_LIMIT,
     byteBudget,
     undefined,
-    { truncateOnByteLimit: true },
+    { truncateOnByteLimit: true, stopScanAfterRange: true },
   );
   validateContentTokens(range.content, limits.maxTokens);
   state.readFileState.set(readStatePath, {
@@ -387,6 +390,7 @@ async function callReadTool(
       numLines: range.lineCount,
       startLine,
       totalLines: range.totalLines,
+      ...(range.partialScan ? { totalLinesIsLowerBound: true } : {}),
       ...(range.truncatedByBytes ? { truncated: true } : {}),
     },
   };
@@ -406,6 +410,7 @@ function renderTextRead(file: {
   numLines: number;
   startLine: number;
   totalLines: number;
+  totalLinesIsLowerBound?: boolean;
   truncated?: boolean;
 }): string {
   if (file.content) {
@@ -417,7 +422,10 @@ function renderTextRead(file: {
       return text;
     }
     const lastLine = file.startLine + file.numLines - 1;
-    return `${text}\n\n<system-reminder>Output truncated at the byte limit: showing lines ${file.startLine}-${lastLine} of ${file.totalLines} total lines. Use offset and limit parameters to read further portions of the file.</system-reminder>`;
+    const rangeDescription = file.totalLinesIsLowerBound
+      ? `showing lines ${file.startLine}-${lastLine}; the file continues beyond this point`
+      : `showing lines ${file.startLine}-${lastLine} of ${file.totalLines} total lines`;
+    return `${text}\n\n<system-reminder>Output truncated at the byte limit: ${rangeDescription}. Use offset and limit parameters to read further portions of the file.</system-reminder>`;
   }
   if (file.truncated) {
     return `<system-reminder>Warning: the first requested line is longer than the output byte limit and could not be returned. Search within the file instead of reading it directly.</system-reminder>`;

@@ -53,3 +53,34 @@ export function readFileSyncWithMetadata(filePath: string): {
     lineEndings: detectLineEndingsForString(raw.slice(0, 4096)),
   };
 }
+
+const METADATA_SNIFF_BYTES = 16 * 1024;
+
+// Detects encoding and line endings from the head of the file without
+// reading the whole file, so metadata can be preserved even for files too
+// large to load into memory.
+export function sniffFileTextMetadata(filePath: string): {
+  encoding: BufferEncoding;
+  lineEndings: LineEndingType;
+} {
+  const buffer = Buffer.alloc(METADATA_SNIFF_BYTES);
+  const fd = openSync(filePath, "r");
+  let bytesRead = 0;
+  try {
+    bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+  } finally {
+    closeSync(fd);
+  }
+  const header = buffer.subarray(0, bytesRead);
+  const encoding: BufferEncoding =
+    bytesRead >= 2 &&
+    header[0] === BOM_UTF16LE[0] &&
+    header[1] === BOM_UTF16LE[1]
+      ? "utf16le"
+      : "utf8";
+  const sample = header.toString(encoding).slice(0, 4096);
+  return {
+    encoding,
+    lineEndings: detectLineEndingsForString(sample),
+  };
+}

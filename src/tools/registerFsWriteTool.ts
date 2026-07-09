@@ -3,7 +3,11 @@ import { dirname } from "node:path";
 import { z } from "zod/v4";
 import { getPatchForDisplay } from "../utils/diff.js";
 import { writeTextContent } from "../utils/file.js";
-import { readFileSyncWithMetadata } from "../utils/fileRead.js";
+import {
+  readFileSyncWithMetadata,
+  sniffFileTextMetadata,
+  type LineEndingType,
+} from "../utils/fileRead.js";
 import { safeMkdir, safeStat } from "../utils/fsResult.js";
 import { expandPath } from "../utils/path.js";
 import { errorResult, unknownErrorResult } from "./toolResult.js";
@@ -77,24 +81,32 @@ Usage:
           );
         }
 
-        // Read the existing content for the diff and to preserve encoding and
-        // line endings. If the existing file cannot be read (too large, not
-        // valid text, ...), still overwrite it - just without a diff.
+        // Preserve the existing file's encoding and line endings; the sniff
+        // reads only the head of the file, so it works for any size. The full
+        // content is read separately - and only for reasonably sized files -
+        // to produce the diff. If the existing file cannot be read, still
+        // overwrite it, just without a diff.
+        let encoding: BufferEncoding = "utf8";
+        let lineEndings: LineEndingType = "LF";
         let meta: ReturnType<typeof readFileSyncWithMetadata> | null = null;
-        if (existingSize !== null && existingSize <= MAX_DIFF_FILE_SIZE) {
+        if (existingSize !== null) {
           try {
-            meta = readFileSyncWithMetadata(fullFilePath);
+            const sniffed = sniffFileTextMetadata(fullFilePath);
+            encoding = sniffed.encoding;
+            lineEndings = sniffed.lineEndings;
           } catch {
-            meta = null;
+            // Keep the utf8/LF defaults.
+          }
+          if (existingSize <= MAX_DIFF_FILE_SIZE) {
+            try {
+              meta = readFileSyncWithMetadata(fullFilePath);
+            } catch {
+              meta = null;
+            }
           }
         }
 
-        writeTextContent(
-          fullFilePath,
-          content,
-          meta?.encoding ?? "utf8",
-          meta?.lineEndings ?? "LF",
-        );
+        writeTextContent(fullFilePath, content, encoding, lineEndings);
 
         if (fileExists) {
           const patch = meta

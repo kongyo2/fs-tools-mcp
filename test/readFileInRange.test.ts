@@ -1,21 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import {
   FileTooLargeError,
   readFileInRange,
 } from "../src/utils/readFileInRange.js";
+import { withTempDir as withPrefixedTempDir } from "./helpers.js";
 
-async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-read-"));
-  try {
-    await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
+const withTempDir = (fn: (dir: string) => Promise<void>) =>
+  withPrefixedTempDir("fs-tools-mcp-read-", fn);
 
 test("readFileInRange returns the requested line window", async () => {
   await withTempDir(async (dir) => {
@@ -92,5 +86,28 @@ test("readFileInRange strips CR from CRLF files and the leading BOM", async () =
 test("readFileInRange rejects directories", async () => {
   await withTempDir(async (dir) => {
     await assert.rejects(readFileInRange(dir), /EISDIR/);
+  });
+});
+
+test("readFileInRange stops scanning large files once the range is filled", async () => {
+  await withTempDir(async (dir) => {
+    const file = join(dir, "large.txt");
+    // Above the 10 MB fast-path threshold so the streaming path is used.
+    const line = `${"x".repeat(63)}\n`;
+    await writeFile(file, line.repeat(200_000), "utf8");
+
+    const stopped = await readFileInRange(file, 0, 3, undefined, undefined, {
+      stopScanAfterRange: true,
+    });
+    assert.equal(stopped.lineCount, 3);
+    assert.equal(stopped.content, `${"x".repeat(63)}\n`.repeat(3).trimEnd());
+    assert.equal(stopped.partialScan, true);
+    assert.ok(stopped.totalLines < 200_000);
+    assert.ok(stopped.totalBytes < 12_800_000);
+
+    const scanned = await readFileInRange(file, 0, 3);
+    assert.equal(scanned.lineCount, 3);
+    assert.equal(scanned.partialScan, undefined);
+    assert.equal(scanned.totalLines, 200_001);
   });
 });

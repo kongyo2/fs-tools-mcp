@@ -12,6 +12,17 @@ export type ReadFileRangeResult = {
   readBytes: number;
   mtimeMs: number;
   truncatedByBytes?: boolean;
+  // When set, scanning stopped as soon as the requested range was filled, so
+  // totalLines and totalBytes are lower bounds rather than exact counts.
+  partialScan?: boolean;
+};
+
+export type ReadFileRangeOptions = {
+  truncateOnByteLimit?: boolean;
+  // Stop reading the file once the requested range is complete instead of
+  // scanning to the end to count the remaining lines. Avoids reading
+  // gigabytes of a huge file just to return its first page.
+  stopScanAfterRange?: boolean;
 };
 
 export class FileTooLargeError extends Error {
@@ -30,10 +41,11 @@ export async function readFileInRange(
   maxLines?: number,
   maxBytes?: number,
   signal?: AbortSignal,
-  options?: { truncateOnByteLimit?: boolean },
+  options?: ReadFileRangeOptions,
 ): Promise<ReadFileRangeResult> {
   signal?.throwIfAborted();
   const truncateOnByteLimit = options?.truncateOnByteLimit ?? false;
+  const stopScanAfterRange = options?.stopScanAfterRange ?? false;
   const stats = await stat(filePath);
   if (stats.isDirectory()) {
     throw new Error(
@@ -65,6 +77,7 @@ export async function readFileInRange(
     maxLines,
     maxBytes,
     truncateOnByteLimit,
+    stopScanAfterRange,
     signal,
   );
 }
@@ -153,6 +166,7 @@ async function readFileInRangeStreaming(
   maxLines: number | undefined,
   maxBytes: number | undefined,
   truncateOnByteLimit: boolean,
+  stopScanAfterRange: boolean,
   signal?: AbortSignal,
 ): Promise<ReadFileRangeResult> {
   return await new Promise((resolve, reject) => {
@@ -176,8 +190,36 @@ async function readFileInRangeStreaming(
       partial: "",
       firstChunk: true,
     };
+    let settled = false;
+
+    const finish = (partialScan: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      const content = state.selectedLines.join("\n");
+      resolve({
+        content,
+        lineCount: state.selectedLines.length,
+        totalLines: state.currentLineIndex,
+        totalBytes: state.totalBytesRead,
+        readBytes: Buffer.byteLength(content, "utf8"),
+        mtimeMs,
+        ...(state.truncatedByBytes ? { truncatedByBytes: true } : {}),
+        ...(partialScan ? { partialScan: true } : {}),
+      });
+      if (partialScan) {
+        stream.destroy();
+      }
+    };
+
+    const rangeComplete = (): boolean =>
+      state.truncatedByBytes || state.currentLineIndex >= state.endLine;
 
     stream.on("data", (chunk: string | Buffer) => {
+      if (settled) {
+        return;
+      }
       let currentChunk =
         typeof chunk === "string" ? chunk : chunk.toString("utf8");
       if (state.firstChunk) {
@@ -249,14 +291,23 @@ async function readFileInRangeStreaming(
           if (nextBytes > state.maxBytes) {
             state.truncatedByBytes = true;
             state.endLine = state.currentLineIndex;
-            return;
+          } else {
+            state.partial = fragment;
           }
+        } else {
+          state.partial = fragment;
         }
-        state.partial = fragment;
+      }
+
+      if (stopScanAfterRange && rangeComplete()) {
+        finish(true);
       }
     });
 
     stream.once("end", () => {
+      if (settled) {
+        return;
+      }
       let line = state.partial;
       if (line.endsWith("\r")) {
         line = line.slice(0, -1);
@@ -279,18 +330,15 @@ async function readFileInRangeStreaming(
         }
       }
       state.currentLineIndex += 1;
-      const content = state.selectedLines.join("\n");
-      resolve({
-        content,
-        lineCount: state.selectedLines.length,
-        totalLines: state.currentLineIndex,
-        totalBytes: state.totalBytesRead,
-        readBytes: Buffer.byteLength(content, "utf8"),
-        mtimeMs,
-        ...(state.truncatedByBytes ? { truncatedByBytes: true } : {}),
-      });
+      finish(false);
     });
 
-    stream.once("error", reject);
+    stream.once("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    });
   });
 }

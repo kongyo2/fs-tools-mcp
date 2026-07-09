@@ -1,16 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { lstatSync, readFileSync, statSync } from "node:fs";
-import {
-  chmod,
-  mkdtemp,
-  readFile,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { hasBinaryExtension } from "../src/constants/files.js";
 import {
   addLineNumbers,
@@ -21,18 +13,14 @@ import {
 import {
   detectLineEndingsForString,
   readFileSyncWithMetadata,
+  sniffFileTextMetadata,
 } from "../src/utils/fileRead.js";
 import { formatFileSize } from "../src/utils/format.js";
 import { plural } from "../src/utils/string.js";
+import { withTempDir as withPrefixedTempDir } from "./helpers.js";
 
-async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "fs-tools-mcp-file-"));
-  try {
-    await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
+const withTempDir = (fn: (dir: string) => Promise<void>) =>
+  withPrefixedTempDir("fs-tools-mcp-file-", fn);
 
 test("writeTextContent writes CRLF line endings when asked", async () => {
   await withTempDir(async (dir) => {
@@ -85,7 +73,7 @@ test("detectLineEndingsForString picks the dominant line ending", () => {
   assert.equal(detectLineEndingsForString("no newlines"), "LF");
 });
 
-test("readFileSyncWithMetadata detects UTF-16 LE files", async () => {
+test("readFileSyncWithMetadata detects UTF-16 LE files and keeps the BOM for round-tripping", async () => {
   await withTempDir(async (dir) => {
     const file = join(dir, "utf16.txt");
     const buffer = Buffer.concat([
@@ -96,6 +84,33 @@ test("readFileSyncWithMetadata detects UTF-16 LE files", async () => {
     const meta = readFileSyncWithMetadata(file);
     assert.equal(meta.encoding, "utf16le");
     assert.ok(meta.content.includes("hello"));
+    // The BOM stays in the content on purpose: it is written back verbatim,
+    // so editing a BOM-prefixed file preserves its BOM.
+    assert.ok(meta.content.startsWith("\uFEFF"));
+  });
+});
+
+test("sniffFileTextMetadata detects encoding and endings without reading the whole file", async () => {
+  await withTempDir(async (dir) => {
+    const utf16 = join(dir, "utf16.txt");
+    await writeFile(
+      utf16,
+      Buffer.concat([
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from("a\r\nb\r\n", "utf16le"),
+      ]),
+    );
+    assert.deepEqual(sniffFileTextMetadata(utf16), {
+      encoding: "utf16le",
+      lineEndings: "CRLF",
+    });
+
+    const plain = join(dir, "plain.txt");
+    await writeFile(plain, "a\nb\n", "utf8");
+    assert.deepEqual(sniffFileTextMetadata(plain), {
+      encoding: "utf8",
+      lineEndings: "LF",
+    });
   });
 });
 
