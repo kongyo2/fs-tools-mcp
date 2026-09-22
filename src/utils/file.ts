@@ -43,8 +43,6 @@ export function writeFileSyncAndFlush(
   content: string,
   options: { encoding: BufferEncoding; mode?: number },
 ): void {
-  // Resolve symlinks so the write goes through to the link target instead of
-  // replacing the link itself with a regular file.
   let targetPath = filePath;
   let originalMode: number | undefined;
   let targetExists = false;
@@ -75,9 +73,7 @@ export function writeFileSyncAndFlush(
   } catch (error) {
     try {
       unlinkSync(tempPath);
-    } catch {
-      // Ignore cleanup failure.
-    }
+    } catch {}
     throw error;
   }
 }

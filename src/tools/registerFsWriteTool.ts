@@ -10,11 +10,11 @@ import {
 } from "../utils/fileRead.js";
 import { safeMkdir, safeStat } from "../utils/fsResult.js";
 import { expandPath } from "../utils/path.js";
+import { hunkSchema } from "./patchSchema.js";
+import { DESTRUCTIVE_TOOL_ANNOTATIONS } from "./toolAnnotations.js";
 import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const FILE_WRITE_TOOL_NAME = "fs_write";
-// Skip diff generation against existing content above this size; the write
-// itself still succeeds.
 const MAX_DIFF_FILE_SIZE = 16 * 1024 * 1024;
 
 const inputSchema = z
@@ -23,14 +23,6 @@ const inputSchema = z
     content: z.string().describe("The content to write to the file"),
   })
   .strict();
-
-const hunkSchema = z.object({
-  oldStart: z.number(),
-  oldLines: z.number(),
-  newStart: z.number(),
-  newLines: z.number(),
-  lines: z.array(z.string()),
-});
 
 const outputSchema = z.object({
   type: z.enum(["create", "update"]),
@@ -52,12 +44,7 @@ Usage:
 - Prefer fs_edit for modifying existing files and fs_write for creation or complete rewrites.`,
       inputSchema,
       outputSchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
+      annotations: DESTRUCTIVE_TOOL_ANNOTATIONS,
     },
     async ({ file_path, content }) => {
       try {
@@ -81,11 +68,6 @@ Usage:
           );
         }
 
-        // Preserve the existing file's encoding and line endings; the sniff
-        // reads only the head of the file, so it works for any size. The full
-        // content is read separately - and only for reasonably sized files -
-        // to produce the diff. If the existing file cannot be read, still
-        // overwrite it, just without a diff.
         let encoding: BufferEncoding = "utf8";
         let lineEndings: LineEndingType = "LF";
         let meta: ReturnType<typeof readFileSyncWithMetadata> | null = null;
@@ -94,9 +76,7 @@ Usage:
             const sniffed = sniffFileTextMetadata(fullFilePath);
             encoding = sniffed.encoding;
             lineEndings = sniffed.lineEndings;
-          } catch {
-            // Keep the utf8/LF defaults.
-          }
+          } catch {}
           if (existingSize <= MAX_DIFF_FILE_SIZE) {
             try {
               meta = readFileSyncWithMetadata(fullFilePath);

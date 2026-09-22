@@ -1,16 +1,12 @@
 import type { StructuredPatchHunk } from "diff";
-import { getPatchFromContents } from "../utils/diff.js";
+import { getPatchFromContents, type FileEdit } from "../utils/diff.js";
 
 export const LEFT_SINGLE_CURLY_QUOTE = "\u2018";
 export const RIGHT_SINGLE_CURLY_QUOTE = "\u2019";
 export const LEFT_DOUBLE_CURLY_QUOTE = "\u201c";
 export const RIGHT_DOUBLE_CURLY_QUOTE = "\u201d";
 
-export type FileEdit = {
-  old_string: string;
-  new_string: string;
-  replace_all: boolean;
-};
+export type { FileEdit };
 
 export function normalizeQuotes(value: string): string {
   return value

@@ -1,8 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { stat } from "node:fs/promises";
 import { z } from "zod/v4";
-import { FILE_NOT_FOUND_CWD_NOTE, suggestPathUnderCwd } from "../utils/file.js";
-import { safeStat } from "../utils/fsResult.js";
 import { expandPath, toRelativePath } from "../utils/path.js";
 import { ripGrep } from "../utils/ripgrep.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
@@ -13,6 +11,8 @@ import {
   renderGrepText,
   type GrepOutput,
 } from "./grepUtils.js";
+import { validateSearchPath } from "./searchPath.js";
+import { READ_ONLY_TOOL_ANNOTATIONS } from "./toolAnnotations.js";
 import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const GREP_TOOL_NAME = "fs_grep";
@@ -107,30 +107,17 @@ Usage:
 - Use multiline: true for cross-line matches.`,
       inputSchema,
       outputSchema,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
     },
     async (input) => {
       try {
         if (input.path) {
-          const absolutePath = expandPath(input.path);
-          const statResult = await safeStat(absolutePath);
-          if (statResult.isErr()) {
-            if (statResult.error.code === "ENOENT") {
-              const cwdSuggestion = await suggestPathUnderCwd(absolutePath);
-              let message = `Path does not exist: ${input.path}. ${FILE_NOT_FOUND_CWD_NOTE} ${process.cwd()}.`;
-              if (cwdSuggestion) {
-                message += ` Did you mean ${cwdSuggestion}?`;
-              }
-              return errorResult(message);
-            }
-            return errorResult(
-              `Cannot access path: ${statResult.error.message}`,
-            );
+          const pathError = await validateSearchPath({
+            path: input.path,
+            missingLabel: "Path",
+          });
+          if (pathError) {
+            return errorResult(pathError);
           }
         }
 
@@ -178,8 +165,6 @@ function buildRipgrepArgs(input: z.infer<typeof inputSchema>): string[] {
     args.push("-c");
   }
   if (output_mode === "content" || output_mode === "count") {
-    // Always print the file name, even when searching a single file, so the
-    // output format stays parseable.
     args.push("--with-filename");
   }
   if (output_mode === "content") {
@@ -197,8 +182,6 @@ function buildRipgrepArgs(input: z.infer<typeof inputSchema>): string[] {
         args.push("-A", String(contextAfter));
       }
     }
-    // Emit context lines with the same "path:line:" format as match lines so
-    // both parse uniformly.
     args.push("--field-context-separator", ":");
   }
   if (pattern.startsWith("-")) {

@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import sharp, { type Sharp } from "sharp";
 import {
   API_IMAGE_MAX_BASE64_SIZE,
   IMAGE_MAX_HEIGHT,
@@ -34,6 +34,47 @@ type CompressedImageResult = {
   mediaType: ImageMediaType;
   originalSize: number;
 };
+
+const JPEG_QUALITY_STEPS = [80, 60, 40, 20];
+const PNG_COMPRESSION_OPTIONS = { compressionLevel: 9, palette: true } as const;
+const RESIZE_FIT_INSIDE = {
+  fit: "inside",
+  withoutEnlargement: true,
+} as const;
+
+async function compressWithinTargetSize(params: {
+  createPipeline: () => Sharp;
+  includePng: boolean;
+  dimensions: ImageDimensions;
+}): Promise<ResizeResult | null> {
+  if (params.includePng) {
+    const pngCompressed = await params
+      .createPipeline()
+      .png(PNG_COMPRESSION_OPTIONS)
+      .toBuffer();
+    if (pngCompressed.length <= IMAGE_TARGET_RAW_SIZE) {
+      return {
+        buffer: pngCompressed,
+        mediaType: "png",
+        dimensions: params.dimensions,
+      };
+    }
+  }
+  for (const quality of JPEG_QUALITY_STEPS) {
+    const compressedBuffer = await params
+      .createPipeline()
+      .jpeg({ quality })
+      .toBuffer();
+    if (compressedBuffer.length <= IMAGE_TARGET_RAW_SIZE) {
+      return {
+        buffer: compressedBuffer,
+        mediaType: "jpeg",
+        dimensions: params.dimensions,
+      };
+    }
+  }
+  return null;
+}
 
 export function detectImageFormatFromBuffer(buffer: Buffer): ImageMediaType {
   if (buffer.length < 4) {
@@ -120,39 +161,18 @@ export async function maybeResizeAndDownsampleImageBuffer(
   const isPng = normalizedMediaType === "png";
 
   if (!needsDimensionResize && originalSize > IMAGE_TARGET_RAW_SIZE) {
-    if (isPng) {
-      const pngCompressed = await sharp(imageBuffer)
-        .png({ compressionLevel: 9, palette: true })
-        .toBuffer();
-      if (pngCompressed.length <= IMAGE_TARGET_RAW_SIZE) {
-        return {
-          buffer: pngCompressed,
-          mediaType: "png",
-          dimensions: {
-            originalWidth,
-            originalHeight,
-            displayWidth: width,
-            displayHeight: height,
-          },
-        };
-      }
-    }
-    for (const quality of [80, 60, 40, 20]) {
-      const compressedBuffer = await sharp(imageBuffer)
-        .jpeg({ quality })
-        .toBuffer();
-      if (compressedBuffer.length <= IMAGE_TARGET_RAW_SIZE) {
-        return {
-          buffer: compressedBuffer,
-          mediaType: "jpeg",
-          dimensions: {
-            originalWidth,
-            originalHeight,
-            displayWidth: width,
-            displayHeight: height,
-          },
-        };
-      }
+    const compressed = await compressWithinTargetSize({
+      createPipeline: () => sharp(imageBuffer),
+      includePng: isPng,
+      dimensions: {
+        originalWidth,
+        originalHeight,
+        displayWidth: width,
+        displayHeight: height,
+      },
+    });
+    if (compressed) {
+      return compressed;
     }
   }
 
@@ -166,55 +186,30 @@ export async function maybeResizeAndDownsampleImageBuffer(
   }
 
   const resizedImageBuffer = await sharp(imageBuffer)
-    .resize(width, height, { fit: "inside", withoutEnlargement: true })
+    .resize(width, height, RESIZE_FIT_INSIDE)
     .toBuffer();
 
   if (resizedImageBuffer.length > IMAGE_TARGET_RAW_SIZE) {
-    if (isPng) {
-      const pngCompressed = await sharp(imageBuffer)
-        .resize(width, height, { fit: "inside", withoutEnlargement: true })
-        .png({ compressionLevel: 9, palette: true })
-        .toBuffer();
-      if (pngCompressed.length <= IMAGE_TARGET_RAW_SIZE) {
-        return {
-          buffer: pngCompressed,
-          mediaType: "png",
-          dimensions: {
-            originalWidth,
-            originalHeight,
-            displayWidth: width,
-            displayHeight: height,
-          },
-        };
-      }
-    }
-    for (const quality of [80, 60, 40, 20]) {
-      const compressedBuffer = await sharp(imageBuffer)
-        .resize(width, height, { fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality })
-        .toBuffer();
-      if (compressedBuffer.length <= IMAGE_TARGET_RAW_SIZE) {
-        return {
-          buffer: compressedBuffer,
-          mediaType: "jpeg",
-          dimensions: {
-            originalWidth,
-            originalHeight,
-            displayWidth: width,
-            displayHeight: height,
-          },
-        };
-      }
+    const compressed = await compressWithinTargetSize({
+      createPipeline: () =>
+        sharp(imageBuffer).resize(width, height, RESIZE_FIT_INSIDE),
+      includePng: isPng,
+      dimensions: {
+        originalWidth,
+        originalHeight,
+        displayWidth: width,
+        displayHeight: height,
+      },
+    });
+    if (compressed) {
+      return compressed;
     }
     const smallerWidth = Math.min(width, 1000);
     const smallerHeight = Math.round(
       (height * smallerWidth) / Math.max(width, 1),
     );
     const compressedBuffer = await sharp(imageBuffer)
-      .resize(smallerWidth, smallerHeight, {
-        fit: "inside",
-        withoutEnlargement: true,
-      })
+      .resize(smallerWidth, smallerHeight, RESIZE_FIT_INSIDE)
       .jpeg({ quality: 20 })
       .toBuffer();
     return {
@@ -271,10 +266,7 @@ export async function compressImageBuffer(
       .resize(
         Math.round((metadata.width ?? 2000) * scalingFactor),
         Math.round((metadata.height ?? 2000) * scalingFactor),
-        {
-          fit: "inside",
-          withoutEnlargement: true,
-        },
+        RESIZE_FIT_INSIDE,
       )
       .jpeg({ quality: 80 })
       .toBuffer();
@@ -283,7 +275,7 @@ export async function compressImageBuffer(
     }
   }
   const ultraCompressed = await sharp(imageBuffer)
-    .resize(400, 400, { fit: "inside", withoutEnlargement: true })
+    .resize(400, 400, RESIZE_FIT_INSIDE)
     .jpeg({ quality: 20 })
     .toBuffer();
   if (ultraCompressed.length <= maxBytes) {

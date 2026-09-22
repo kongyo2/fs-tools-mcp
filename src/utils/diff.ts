@@ -5,7 +5,7 @@ export type { StructuredPatchHunk };
 export const CONTEXT_LINES = 3;
 export const DIFF_TIMEOUT_MS = 5000;
 
-type FileEdit = {
+export type FileEdit = {
   old_string: string;
   new_string: string;
   replace_all: boolean;

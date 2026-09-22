@@ -1,10 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v4";
 import { glob } from "../utils/glob.js";
-import { FILE_NOT_FOUND_CWD_NOTE, suggestPathUnderCwd } from "../utils/file.js";
-import { safeStat } from "../utils/fsResult.js";
 import { expandPath, toRelativePath } from "../utils/path.js";
 import { semanticNumber } from "../utils/semanticNumber.js";
+import { validateSearchPath } from "./searchPath.js";
+import { READ_ONLY_TOOL_ANNOTATIONS } from "./toolAnnotations.js";
 import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const GLOB_TOOL_NAME = "fs_glob";
@@ -52,33 +52,18 @@ Usage:
 - Use this tool when you need to find files by name patterns.`,
       inputSchema,
       outputSchema,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
     },
     async ({ pattern, path, limit = DEFAULT_GLOB_LIMIT, offset = 0 }) => {
       try {
         if (path) {
-          const absolutePath = expandPath(path);
-          const statResult = await safeStat(absolutePath);
-          if (statResult.isErr()) {
-            if (statResult.error.code === "ENOENT") {
-              const cwdSuggestion = await suggestPathUnderCwd(absolutePath);
-              let message = `Directory does not exist: ${path}. ${FILE_NOT_FOUND_CWD_NOTE} ${process.cwd()}.`;
-              if (cwdSuggestion) {
-                message += ` Did you mean ${cwdSuggestion}?`;
-              }
-              return errorResult(message);
-            }
-            return errorResult(
-              `Cannot access path: ${statResult.error.message}`,
-            );
-          }
-          if (!statResult.value.isDirectory()) {
-            return errorResult(`Path is not a directory: ${path}`);
+          const pathError = await validateSearchPath({
+            path,
+            missingLabel: "Directory",
+            requireDirectory: true,
+          });
+          if (pathError) {
+            return errorResult(pathError);
           }
         }
 

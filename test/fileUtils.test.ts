@@ -84,8 +84,6 @@ test("readFileSyncWithMetadata detects UTF-16 LE files and keeps the BOM for rou
     const meta = readFileSyncWithMetadata(file);
     assert.equal(meta.encoding, "utf16le");
     assert.ok(meta.content.includes("hello"));
-    // The BOM stays in the content on purpose: it is written back verbatim,
-    // so editing a BOM-prefixed file preserves its BOM.
     assert.ok(meta.content.startsWith("\uFEFF"));
   });
 });

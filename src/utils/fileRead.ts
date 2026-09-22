@@ -56,9 +56,6 @@ export function readFileSyncWithMetadata(filePath: string): {
 
 const METADATA_SNIFF_BYTES = 16 * 1024;
 
-// Detects encoding and line endings from the head of the file without
-// reading the whole file, so metadata can be preserved even for files too
-// large to load into memory.
 export function sniffFileTextMetadata(filePath: string): {
   encoding: BufferEncoding;
   lineEndings: LineEndingType;

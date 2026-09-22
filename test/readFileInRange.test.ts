@@ -92,7 +92,6 @@ test("readFileInRange rejects directories", async () => {
 test("readFileInRange stops scanning large files once the range is filled", async () => {
   await withTempDir(async (dir) => {
     const file = join(dir, "large.txt");
-    // Above the 10 MB fast-path threshold so the streaming path is used.
     const line = `${"x".repeat(63)}\n`;
     await writeFile(file, line.repeat(200_000), "utf8");
 

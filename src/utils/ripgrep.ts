@@ -86,7 +86,6 @@ export async function ripGrep(
         resolve(normalizeLines(stdout));
         return;
       }
-      // Exit code 1 means the search completed but found no matches.
       if (error.code === 1) {
         resolve([]);
         return;
@@ -121,10 +120,6 @@ export async function ripGrep(
         resolve(partialResults);
         return;
       }
-      // Exit code 2 with output means some files matched while others errored
-      // (e.g. permission denied); return what we have. With no output at all,
-      // surface the real failure (invalid regex, bad flag, ...) instead of
-      // silently reporting "no matches".
       if (partialResults.length > 0) {
         resolve(partialResults);
         return;

@@ -18,11 +18,11 @@ import {
 import { Result, ok, err } from "neverthrow";
 import { expandPath } from "../utils/path.js";
 import { semanticBoolean } from "../utils/semanticBoolean.js";
+import { hunkSchema } from "./patchSchema.js";
+import { DESTRUCTIVE_TOOL_ANNOTATIONS } from "./toolAnnotations.js";
 import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const FILE_EDIT_TOOL_NAME = "fs_edit";
-// Keep well below V8's maximum string length (~512 MB) so the file can be
-// read into a single string safely.
 const MAX_EDIT_FILE_SIZE = 256 * 1024 * 1024;
 
 const inputSchema = z
@@ -35,14 +35,6 @@ const inputSchema = z
     ).describe("Replace all occurrences of old_string (default false)"),
   })
   .strict();
-
-const hunkSchema = z.object({
-  oldStart: z.number(),
-  oldLines: z.number(),
-  newStart: z.number(),
-  newLines: z.number(),
-  lines: z.array(z.string()),
-});
 
 const outputSchema = z.object({
   filePath: z.string(),
@@ -63,12 +55,7 @@ export function registerFsEditTool(server: McpServer): void {
         "Modify file contents in place using old_string/new_string replacement.",
       inputSchema,
       outputSchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
+      annotations: DESTRUCTIVE_TOOL_ANNOTATIONS,
     },
     async ({ file_path, old_string, new_string, replace_all = false }) => {
       try {
@@ -190,7 +177,6 @@ async function prepareEdit(
       };
     }
     if (oldString === "") {
-      // Creating a new file.
       return {
         ok: true,
         meta: { content: "", encoding: "utf8", lineEndings: "LF" },
