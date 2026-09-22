@@ -28,6 +28,7 @@ import { readFileInRange } from "../utils/readFileInRange.js";
 import { semanticNumber } from "../utils/semanticNumber.js";
 import { getDefaultFileReadingLimits } from "./fsReadLimits.js";
 import { readImageWithTokenBudget } from "./sharedRead.js";
+import { READ_ONLY_TOOL_ANNOTATIONS } from "./toolAnnotations.js";
 import { errorResult, unknownErrorResult } from "./toolResult.js";
 
 const FILE_READ_TOOL_NAME = "fs_read";
@@ -127,9 +128,6 @@ type ReadOutput =
       };
     };
 
-// Flat object schema: the MCP SDK's schema normalization cannot handle a
-// zod discriminated union (it returns undefined and later crashes), so the
-// detailed shape lives in the ReadOutput type above instead.
 const outputSchema = z.object({
   type: z.enum(["text", "image", "notebook", "pdf", "parts", "file_unchanged"]),
   file: z.any(),
@@ -153,16 +151,9 @@ Usage:
 - For PDFs over ${PDF_MAX_INLINE_PAGES} pages, you must provide the pages parameter.`,
       inputSchema,
       outputSchema,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
     },
     async ({ file_path, offset = 1, limit, pages }) => {
-      // Treat offset 0 and 1 identically as "start of file" so line numbers
-      // in the output always match the 1-indexed offset parameter.
       const startLine = Math.max(offset, 1);
       try {
         if (pages !== undefined) {
@@ -228,7 +219,6 @@ Usage:
               };
             }
           }
-          // On stat failure (e.g. file deleted), fall through to a full read.
         }
 
         const data = await callReadTool(
@@ -362,11 +352,6 @@ async function callReadTool(
     return pdf.data;
   }
 
-  // Cap the byte budget so the returned content always fits the token budget
-  // (4 bytes/token estimate); overly long content is truncated with a notice
-  // instead of failing the whole read. Scanning stops once the requested
-  // range is filled, so huge files are not read to the end just to count
-  // their lines.
   const byteBudget = Math.min(limits.maxSizeBytes, limits.maxTokens * 4);
   const range = await readFileInRange(
     resolvedPath,

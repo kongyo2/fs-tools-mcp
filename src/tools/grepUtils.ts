@@ -14,17 +14,9 @@ export type GrepOutput = {
   appliedOffset?: number;
 };
 
-/**
- * Parses a ripgrep content-mode output line to extract the file path.
- * Handles both line-numbered output (filepath:linenum:content) and
- * plain output (filepath:content), including Windows drive-letter paths.
- * Context lines are normalized to the same ":" separator via ripgrep's
- * --field-context-separator flag, so a single format covers both.
- */
 export function parseRipgrepContentLine(
   line: string,
 ): { filePath: string; rest: string } | null {
-  // Match line with line numbers: filepath:linenum:content
   const lineNumMatch = line.match(/^(.+?):(\d+):/);
   if (lineNumMatch) {
     return {
@@ -32,8 +24,6 @@ export function parseRipgrepContentLine(
       rest: line.slice(lineNumMatch[1].length),
     };
   }
-  // Fallback for no line numbers: filepath:content
-  // Skip Windows drive letter (e.g., C:\...)
   const startIdx =
     line.length > 2 && line[1] === ":" && /^[a-zA-Z]$/.test(line[0]) ? 2 : 0;
   const colonIndex = line.indexOf(":", startIdx);
